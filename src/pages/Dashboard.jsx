@@ -3,8 +3,19 @@ import { Users, ClipboardList, AlertTriangle, Clock } from "lucide-react";
 import { db } from "../firebase";
 import { collection, getDocs } from "firebase/firestore";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { useNavigate } from 'react-router-dom';
 
 export default function Dashboard() {
+  // Hooks harus di dalam sini
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/'); // Tendang ke login kalau gak ada token
+    }
+  }, [navigate]);
+
   const [stats, setStats] = useState({
     totalKaryawan: 0,
     hariHadir: 0,
