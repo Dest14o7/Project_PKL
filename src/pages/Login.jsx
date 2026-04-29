@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { auth } from '../firebase'; 
+import { useEffect } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 
 const Login = () => {
@@ -8,6 +9,13 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      navigate('/dashboard');
+    }
+  }, [navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -20,12 +28,13 @@ const Login = () => {
       
       // ke storage
       localStorage.setItem('token', token);
+
       
       navigate('/dashboard'); 
     } catch (err) {
       setError('Email/Password salah bos!');
     }
-  };
+  };``
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-100">

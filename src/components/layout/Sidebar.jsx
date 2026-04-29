@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { 
   LayoutDashboard, Users, ClipboardList, 
   AlertTriangle, FileText, DollarSign, ChevronLeft, ChevronRight 
@@ -15,6 +16,7 @@ const menuItems = [
 
 export default function Sidebar({ activePage, onNavigate }) {
   const [collapsed, setCollapsed] = useState(false);
+  const navigate = useNavigate();
 
   return (
     <div className={`${collapsed ? "w-16" : "w-64"} min-h-screen flex flex-col transition-all duration-300`} 
@@ -42,7 +44,10 @@ export default function Sidebar({ activePage, onNavigate }) {
           return (
             <button
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => {
+                navigate(`/${item.id}`);
+                if (onNavigate) onNavigate(item.id);
+              }}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors"
               style={{
                 backgroundColor: isActive ? "#ECB176" : "transparent",
