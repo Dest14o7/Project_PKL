@@ -14,7 +14,8 @@ export default function Karyawan() {
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState("tetap");
   const [form, setForm] = useState({
-    nama: "", userId: "", dept: "", tarifJam: "", tipe: "tetap", status: "aktif"
+    nama: "", userId: "", dept: "", tarifJam: "", tipe: "tetap", status: "aktif",
+    gajiPokok: "", saldoCuti: 12, potonganIzinPerHari: "", potonganBPJSTetap: ""
   });
 
   const fetchKaryawan = async () => {
@@ -30,8 +31,10 @@ export default function Karyawan() {
   const handleSubmit = async () => {
     if (!form.nama || !form.userId) return alert("Nama dan User ID wajib diisi!");
 
+    const normalizedId = form.userId?.toString()?.trim()?.replace(/^0+/, "") || "";
     const dataToSave = {
       ...form,
+      userId: normalizedId,
       dept: activeTab === "freelance" ? "freelance" : form.dept,
       tipe: activeTab,
     };
@@ -41,7 +44,10 @@ export default function Karyawan() {
     } else {
       await addDoc(collection(db, "karyawan"), dataToSave);
     }
-    setForm({ nama: "", userId: "", dept: "", tarifJam: "", tipe: activeTab, status: "aktif" });
+    setForm({ 
+      nama: "", userId: "", dept: "", tarifJam: "", tipe: activeTab, status: "aktif",
+      gajiPokok: "", saldoCuti: 12, potonganIzinPerHari: "", potonganBPJSTetap: ""
+    });
     setEditData(null);
     setShowForm(false);
     fetchKaryawan();
@@ -49,7 +55,12 @@ export default function Karyawan() {
 
   const handleEdit = (k) => {
     setEditData(k);
-    setForm({ nama: k.nama, userId: k.userId, dept: k.dept, tarifJam: k.tarifJam, tipe: k.tipe, status: k.status });
+    setForm({ 
+      nama: k.nama, userId: k.userId, dept: k.dept, tarifJam: k.tarifJam, 
+      tipe: k.tipe, status: k.status, gajiPokok: k.gajiPokok || "", 
+      saldoCuti: k.saldoCuti || 12, potonganIzinPerHari: k.potonganIzinPerHari || "", 
+      potonganBPJSTetap: k.potonganBPJSTetap || "" 
+    });
     setShowForm(true);
   };
 
@@ -104,7 +115,7 @@ export default function Karyawan() {
             {showArsip ? "Lihat Aktif" : `Arsip (${arsipFiltered.length})`}
           </button>
           <button
-            onClick={() => { setShowForm(true); setEditData(null); setForm({ nama: "", userId: "", dept: "", tarifJam: "", tipe: activeTab, status: "aktif" }); }}
+            onClick={() => { setShowForm(true); setEditData(null); setForm({ nama: "", userId: "", dept: "", tarifJam: "", tipe: activeTab, status: "aktif", gajiPokok: "", saldoCuti: 12, potonganIzinPerHari: "", potonganBPJSTetap: "" }); }}
             className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
             style={{ backgroundColor: "#6F4E37", color: "#FED8B1" }}
           >
@@ -152,11 +163,11 @@ export default function Karyawan() {
       {/* Form Modal */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: "rgba(0,0,0,0.4)" }}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-bold mb-4" style={{ color: "#6F4E37" }}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-bold mb-4 sticky top-0 bg-white pb-2 z-10" style={{ color: "#6F4E37" }}>
               {editData ? "Edit Data" : `Tambah ${activeTab === "tetap" ? "Karyawan" : "Freelance"}`}
             </h3>
-            <div className="space-y-3">
+            <div className="space-y-3 pb-2">
 
               {/* Nama */}
               <div>
@@ -216,21 +227,67 @@ export default function Karyawan() {
                 </div>
               )}
 
-              {/* Tarif per Jam */}
-              <div>
-                <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Tarif per Jam (Rp)</label>
-                <input
-                  type="number"
-                  placeholder="Contoh: 15000"
-                  value={form.tarifJam}
-                  onChange={e => setForm({ ...form, tarifJam: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ border: "1px solid #ECB176", color: "#6F4E37" }}
-                />
+              {/* Gaji Pokok & Tarif Lembur */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Gaji Pokok (Rp)</label>
+                  <input
+                    type="number"
+                    value={form.gajiPokok}
+                    onChange={e => setForm({ ...form, gajiPokok: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Tarif Lembur / Jam</label>
+                  <input
+                    type="number"
+                    value={form.tarifJam}
+                    onChange={e => setForm({ ...form, tarifJam: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                  />
+                </div>
               </div>
 
+              {activeTab === "tetap" && (
+                <>
+                  {/* Saldo Cuti & Potongan Izin */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Saldo Cuti (Hari)</label>
+                      <input
+                        type="number"
+                        value={form.saldoCuti}
+                        onChange={e => setForm({ ...form, saldoCuti: e.target.value })}
+                        className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Pot. Izin / Hari</label>
+                      <input
+                        type="number"
+                        value={form.potonganIzinPerHari}
+                        onChange={e => setForm({ ...form, potonganIzinPerHari: e.target.value })}
+                        className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                      />
+                    </div>
+                  </div>
+
+                  {/* BPJS */}
+                  <div>
+                    <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Potongan BPJS Tetap (Rp)</label>
+                    <input
+                      type="number"
+                      value={form.potonganBPJSTetap}
+                      onChange={e => setForm({ ...form, potonganBPJSTetap: e.target.value })}
+                      className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                    />
+                  </div>
+                </>
+              )}
+
             </div>
-            <div className="flex gap-2 mt-5">
+            <div className="flex gap-2 mt-5 sticky bottom-0 bg-white pt-2 z-10">
               <button
                 onClick={() => { setShowForm(false); setEditData(null); }}
                 className="flex-1 py-2 rounded-lg text-sm font-medium"
@@ -250,76 +307,115 @@ export default function Karyawan() {
         </div>
       )}
 
-      {/* Tabel */}
-      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr style={{ backgroundColor: "#6F4E37", color: "#FED8B1" }}>
-              <th className="px-4 py-3 text-left">User ID</th>
-              <th className="px-4 py-3 text-left">Nama</th>
-              <th className="px-4 py-3 text-left">Departemen</th>
-              <th className="px-4 py-3 text-left">Tarif/Jam</th>
-              <th className="px-4 py-3 text-center">Aksi</th>
-            </tr>
-          </thead>
-          <tbody>
-            {!showArsip && filtered.length === 0 && (
-              <tr>
-                <td colSpan={5} className="text-center py-8" style={{ color: "#A67B5B" }}>
-                  Belum ada data {activeTab === "tetap" ? "karyawan tetap" : "freelance"}
-                </td>
-              </tr>
-            )}
-            {!showArsip && filtered.map((k, i) => (
-              <tr key={k.id} style={{ backgroundColor: i % 2 === 0 ? "#fffaf5" : "white" }}>
-                <td className="px-4 py-3" style={{ color: "#6F4E37" }}>{k.userId}</td>
-                <td className="px-4 py-3 font-medium" style={{ color: "#6F4E37" }}>{k.nama}</td>
-                <td className="px-4 py-3" style={{ color: "#A67B5B" }}>{k.dept}</td>
-                <td className="px-4 py-3" style={{ color: "#A67B5B" }}>
-                  Rp {Number(k.tarifJam).toLocaleString("id-ID")}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center justify-center gap-2">
-                    <button onClick={() => handleEdit(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#ECB176", color: "#6F4E37" }}>
-                      <Pencil size={14} />
-                    </button>
-                    <button onClick={() => handleHapus(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}>
-                      <Trash2 size={14} />
-                    </button>
+      {/* List Karyawan */}
+      {activeTab === "tetap" ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.map(k => (
+            <div key={k.id} className="bg-white rounded-2xl p-5 shadow-sm border border-[#ECB176] flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg"
+                    style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}>
+                    {k.nama?.[0]?.toUpperCase()}
                   </div>
-                </td>
-              </tr>
-            ))}
-            {showArsip && arsipFiltered.length === 0 && (
-              <tr>
-                <td colSpan={5} className="text-center py-8" style={{ color: "#A67B5B" }}>
-                  Tidak ada data di arsip
-                </td>
-              </tr>
-            )}
-            {showArsip && arsipFiltered.map((k, i) => (
-              <tr key={k.id} style={{ backgroundColor: i % 2 === 0 ? "#fffaf5" : "white" }}>
-                <td className="px-4 py-3" style={{ color: "#6F4E37" }}>{k.userId}</td>
-                <td className="px-4 py-3 font-medium" style={{ color: "#6F4E37" }}>{k.nama}</td>
-                <td className="px-4 py-3" style={{ color: "#A67B5B" }}>{k.dept}</td>
-                <td className="px-4 py-3" style={{ color: "#A67B5B" }}>
-                  Rp {Number(k.tarifJam).toLocaleString("id-ID")}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center justify-center gap-2">
-                    <button onClick={() => handleRestore(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#ECB176", color: "#6F4E37" }}>
-                      <RotateCcw size={14} />
-                    </button>
-                    <button onClick={() => handleDeletePermanent(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}>
-                      <Trash2 size={14} />
-                    </button>
+                  <div className="text-right">
+                    <p className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>ID: {k.userId}</p>
+                    <p className="text-xs font-medium" style={{ color: "#6F4E37" }}>{k.dept}</p>
                   </div>
-                </td>
+                </div>
+                <h4 className="font-bold text-lg mb-4" style={{ color: "#6F4E37" }}>{k.nama}</h4>
+                
+                <div className="grid grid-cols-2 gap-y-3 gap-x-2 text-[11px]">
+                  <div>
+                    <p style={{ color: "#A67B5B" }}>Gaji Pokok</p>
+                    <p className="font-bold" style={{ color: "#6F4E37" }}>Rp {Number(k.gajiPokok || 0).toLocaleString("id-ID")}</p>
+                  </div>
+                  <div>
+                    <p style={{ color: "#A67B5B" }}>Tarif Lembur</p>
+                    <p className="font-bold" style={{ color: "#6F4E37" }}>Rp {Number(k.tarifJam || 0).toLocaleString("id-ID")}/jam</p>
+                  </div>
+                  <div>
+                    <p style={{ color: "#A67B5B" }}>Saldo Cuti</p>
+                    <p className="font-bold" style={{ color: "#6F4E37" }}>{k.saldoCuti || 0} Hari</p>
+                  </div>
+                  <div>
+                    <p style={{ color: "#A67B5B" }}>Pot. Izin</p>
+                    <p className="font-bold" style={{ color: "#6F4E37" }}>Rp {Number(k.potonganIzinPerHari || 0).toLocaleString("id-ID")}/hari</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p style={{ color: "#A67B5B" }}>Potongan BPJS</p>
+                    <p className="font-bold" style={{ color: "#6F4E37" }}>Rp {Number(k.potonganBPJSTetap || 0).toLocaleString("id-ID")}/periode</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-6">
+                <button 
+                  onClick={() => handleEdit(k)}
+                  className="flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                  style={{ backgroundColor: "#ECB176", color: "#6F4E37" }}
+                >
+                  <Pencil size={14} /> EDIT
+                </button>
+                <button 
+                  onClick={() => handleHapus(k)}
+                  className="px-3 py-2 rounded-lg text-xs font-bold transition-colors"
+                  style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ backgroundColor: "#6F4E37", color: "#FED8B1" }}>
+                <th className="px-4 py-3 text-left">User ID</th>
+                <th className="px-4 py-3 text-left">Nama</th>
+                <th className="px-4 py-3 text-left">Departemen</th>
+                <th className="px-4 py-3 text-left">Gaji Pokok</th>
+                <th className="px-4 py-3 text-left">Tarif/Jam</th>
+                <th className="px-4 py-3 text-center">Aksi</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="text-center py-8" style={{ color: "#A67B5B" }}>
+                    Belum ada data freelance
+                  </td>
+                </tr>
+              )}
+              {filtered.map((k, i) => (
+                <tr key={k.id} style={{ backgroundColor: i % 2 === 0 ? "#fffaf5" : "white" }}>
+                  <td className="px-4 py-3" style={{ color: "#6F4E37" }}>{k.userId}</td>
+                  <td className="px-4 py-3 font-medium" style={{ color: "#6F4E37" }}>{k.nama}</td>
+                  <td className="px-4 py-3" style={{ color: "#A67B5B" }}>{k.dept}</td>
+                  <td className="px-4 py-3" style={{ color: "#A67B5B" }}>
+                    Rp {Number(k.gajiPokok || 0).toLocaleString("id-ID")}
+                  </td>
+                  <td className="px-4 py-3" style={{ color: "#A67B5B" }}>
+                    Rp {Number(k.tarifJam || 0).toLocaleString("id-ID")}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-center gap-2">
+                      <button onClick={() => handleEdit(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#ECB176", color: "#6F4E37" }}>
+                        <Pencil size={14} />
+                      </button>
+                      <button onClick={() => handleHapus(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

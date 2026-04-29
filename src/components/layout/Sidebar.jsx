@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { 
   LayoutDashboard, Users, ClipboardList, 
-  AlertTriangle, FileText, DollarSign, ChevronLeft, ChevronRight 
+  AlertTriangle, FileText, DollarSign, ChevronLeft, ChevronRight, Settings 
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", id: "dashboard" },
@@ -11,10 +12,12 @@ const menuItems = [
   { icon: AlertTriangle, label: "Anomali", id: "anomali" },
   { icon: FileText, label: "Izin", id: "izin" },
   { icon: DollarSign, label: "Gaji", id: "gaji" },
+  { icon: Settings, label: "Pengaturan", id: "pengaturan" },
 ];
 
-export default function Sidebar({ activePage, onNavigate }) {
+export default function Sidebar({ activePage }) {
   const [collapsed, setCollapsed] = useState(false);
+  const navigate = useNavigate();
 
   return (
     <div className={`${collapsed ? "w-16" : "w-64"} min-h-screen flex flex-col transition-all duration-300`} 
@@ -42,7 +45,7 @@ export default function Sidebar({ activePage, onNavigate }) {
           return (
             <button
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => navigate("/" + item.id)}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors"
               style={{
                 backgroundColor: isActive ? "#ECB176" : "transparent",

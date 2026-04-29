@@ -1,40 +1,84 @@
 import { useState, useEffect } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp, CheckCircle, Clock, UserX, LogOut, Pencil } from "lucide-react";
 import { db } from "../firebase";
-import { collection, getDocs, updateDoc, doc } from "firebase/firestore";
+import { collection, getDocs, updateDoc, doc, getDoc } from "firebase/firestore";
 
 const jenisColor = {
-  "Terlambat": { bg: "#FFF3CD", color: "#856404" },
   "Tidak Hadir": { bg: "#F8D7DA", color: "#842029" },
-  "Pulang Cepat": { bg: "#D1ECF1", color: "#0C5460" },
   "Scan Tidak Lengkap": { bg: "#E8D5F5", color: "#6B21A8" },
 };
 
 const jenisIcon = {
-  "Terlambat": <Clock size={12} />,
   "Tidak Hadir": <UserX size={12} />,
-  "Pulang Cepat": <LogOut size={12} />,
   "Scan Tidak Lengkap": <AlertTriangle size={12} />,
 };
 
 export default function Anomali() {
   const [anomaliData, setAnomaliData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("reguler");
   const [expandedKaryawan, setExpandedKaryawan] = useState(null);
-  const [filterJenis, setFilterJenis] = useState("semua");
   const [filterNama, setFilterNama] = useState("");
+  const [selectedPeriode, setSelectedPeriode] = useState("");
+  const [allPeriods, setAllPeriods] = useState([]);
+  const [monthPrefix, setMonthPrefix] = useState("");
+  const [filterJenis, setFilterJenis] = useState("semua");
   const [editData, setEditData] = useState(null);
   const [editForm, setEditForm] = useState({ keterangan: "", jamTambahan: "" });
 
   const fetchAnomali = async () => {
-    setLoading(true);
-    const snapshot = await getDocs(collection(db, "anomali"));
-    const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    setAnomaliData(data);
-    setLoading(false);
+    try {
+      setLoading(true);
+      
+      // 1. Fetch Config
+      const configSnap = await getDoc(doc(db, "config", "global"));
+      const configData = configSnap.exists() ? configSnap.data() : {};
+      const activeP = configData.periodeAktif || "";
+      const pList = (configData.periodeList || [])
+        .map(p => typeof p === "string" ? p : p.name)
+        .filter(Boolean);
+      setAllPeriods(pList);
+
+      const targetP = selectedPeriode || activeP;
+      if (!selectedPeriode && activeP) setSelectedPeriode(activeP);
+
+      let prefix = "";
+      if (targetP) {
+        const [bulan, tahun] = targetP.split(" ");
+        const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+        const bulanIndex = bulanIndo.indexOf(bulan) + 1;
+        prefix = (bulanIndex > 0 && tahun) ? `${tahun}-${bulanIndex.toString().padStart(2, "0")}` : "";
+        setMonthPrefix(prefix);
+      }
+
+      // 2. Fetch Anomali & Karyawan
+      const snapshot = await getDocs(collection(db, "anomali"));
+      const rawAnomali = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      const karyawanSnap = await getDocs(collection(db, "karyawan"));
+      const karyawanData = karyawanSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      const data = rawAnomali
+        .map(a => {
+          const k = karyawanData.find(emp => 
+            emp.userId?.toString()?.trim()?.replace(/^0+/, "") === a.userId?.toString()?.trim()?.replace(/^0+/, "")
+          );
+          return { ...a, tipe: k?.tipe || "tetap" };
+        })
+        .filter(a => 
+          (a.jenis === "Tidak Hadir" || a.jenis === "Scan Tidak Lengkap") &&
+          (prefix ? a.tanggal?.startsWith(prefix) : true)
+        );
+
+      setAnomaliData(data);
+    } catch (err) {
+      console.error("Anomali Fetch Error:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { fetchAnomali(); }, []);
+  useEffect(() => { fetchAnomali(); }, [selectedPeriode]);
 
   const handleKonfirmasi = async (id) => {
     await updateDoc(doc(db, "anomali", id), { status: "dikonfirmasi" });
@@ -125,8 +169,12 @@ export default function Anomali() {
   fetchAnomali();
 };
 
+  // Filter by Tab
+  const tabType = activeTab === "reguler" ? "tetap" : "freelance";
+  let filteredData = anomaliData.filter(a => a.tipe === tabType);
+
   // Group anomali per karyawan
-  const grouped = anomaliData.reduce((acc, a) => {
+  const grouped = filteredData.reduce((acc, a) => {
     const key = a.userId;
     if (!acc[key]) {
       acc[key] = { userId: a.userId, nama: a.nama, dept: a.dept, anomalis: [] };
@@ -141,35 +189,94 @@ export default function Anomali() {
       k.nama?.toLowerCase().includes(filterNama.toLowerCase())
     );
   }
+  
   if (filterJenis !== "semua") {
     groupedList = groupedList
       .map(k => ({ ...k, anomalis: k.anomalis.filter(a => a.jenis === filterJenis) }))
       .filter(k => k.anomalis.length > 0);
   }
-  groupedList.sort((a, b) => Number(a.userId) - Number(b.userId));
 
-  const totalBelum = anomaliData.filter(a => a.status === "belum").length;
-  const totalTerlambat = anomaliData.filter(a => a.jenis === "Terlambat").length;
-  const totalTidakHadir = anomaliData.filter(a => a.jenis === "Tidak Hadir").length;
-  const totalPulangCepat = anomaliData.filter(a => a.jenis === "Pulang Cepat").length;
-  const totalScanTidakLengkap = anomaliData.filter(a => a.jenis === "Scan Tidak Lengkap").length;
+  groupedList.sort((a, b) => {
+    const idA = Number(a.userId) || 0;
+    const idB = Number(b.userId) || 0;
+    return idA - idB;
+  });
+
+  const totalBelum = filteredData.filter(a => a.status === "belum").length;
+  const totalTidakHadir = filteredData.filter(a => a.jenis === "Tidak Hadir").length;
+  const totalScanTidakLengkap = filteredData.filter(a => a.jenis === "Scan Tidak Lengkap").length;
 
   return (
     <div className="space-y-6">
 
       {/* Header */}
-      <div>
-        <h2 className="text-xl font-bold" style={{ color: "#6F4E37" }}>Pengecekan Anomali</h2>
-        <p className="text-xs mt-1" style={{ color: "#A67B5B" }}>Deteksi ketidaksesuaian absensi karyawan</p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl font-bold" style={{ color: "#6F4E37" }}>Pengecekan Anomali</h2>
+          <p className="text-xs mt-1" style={{ color: "#A67B5B" }}>
+            Periode: {selectedPeriode || "-"} · {activeTab === "reguler" ? "Reguler" : "Freelance"}
+          </p>
+        </div>
+        <div className="flex gap-3">
+          <select
+            value={filterJenis}
+            onChange={e => setFilterJenis(e.target.value)}
+            className="px-3 py-1.5 rounded-lg text-sm outline-none"
+            style={{ border: "1px solid #ECB176", color: "#6F4E37", backgroundColor: "white" }}
+          >
+            <option value="semua">Semua Jenis</option>
+            <option value="Tidak Hadir">Tidak Hadir</option>
+            <option value="Scan Tidak Lengkap">Scan Tidak Lengkap</option>
+          </select>
+
+          <input
+            type="text"
+            placeholder="Cari nama..."
+            value={filterNama}
+            onChange={e => setFilterNama(e.target.value)}
+            className="px-3 py-1.5 rounded-lg text-sm outline-none w-40"
+            style={{ border: "1px solid #ECB176", color: "#6F4E37", backgroundColor: "white" }}
+          />
+
+          <select 
+            value={selectedPeriode}
+            onChange={(e) => setSelectedPeriode(e.target.value)}
+            className="bg-white border border-[#ECB176] text-[#6F4E37] rounded-lg px-3 py-1.5 text-sm outline-none"
+          >
+            <option value="" disabled>Pilih Periode</option>
+            {allPeriods.map(p => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2">
+        {[
+          { id: "reguler", label: "Karyawan Reguler" },
+          { id: "freelance", label: "Pekerja Freelance" },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className="px-5 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{
+              backgroundColor: activeTab === tab.id ? "#6F4E37" : "white",
+              color: activeTab === tab.id ? "#FED8B1" : "#A67B5B",
+              border: "1px solid #ECB176"
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {[
           { label: "Belum Dikonfirmasi", value: totalBelum, bg: "#6F4E37", color: "#FED8B1" },
-          { label: "Terlambat", value: totalTerlambat, bg: "#FFF3CD", color: "#856404" },
           { label: "Tidak Hadir", value: totalTidakHadir, bg: "#F8D7DA", color: "#842029" },
-          { label: "Pulang Cepat", value: totalPulangCepat, bg: "#D1ECF1", color: "#0C5460" },
           { label: "Scan Tidak Lengkap", value: totalScanTidakLengkap, bg: "#E8D5F5", color: "#6B21A8" },
         ].map((s, i) => (
           <div key={i} className="rounded-xl p-4" style={{ backgroundColor: s.bg }}>
@@ -179,30 +286,6 @@ export default function Anomali() {
         ))}
       </div>
 
-      {/* Filter */}
-      <div className="flex flex-wrap gap-3 items-center">
-        <select
-          value={filterJenis}
-          onChange={e => setFilterJenis(e.target.value)}
-          className="px-3 py-1.5 rounded-lg text-sm outline-none"
-          style={{ border: "1px solid #ECB176", color: "#6F4E37", backgroundColor: "white" }}
-        >
-          <option value="semua">Semua Jenis</option>
-          <option value="Terlambat">Terlambat</option>
-          <option value="Tidak Hadir">Tidak Hadir</option>
-          <option value="Pulang Cepat">Pulang Cepat</option>
-          <option value="Scan Tidak Lengkap">Scan Tidak Lengkap</option>
-        </select>
-
-        <input
-          type="text"
-          placeholder="Cari nama karyawan..."
-          value={filterNama}
-          onChange={e => setFilterNama(e.target.value)}
-          className="px-3 py-1.5 rounded-lg text-sm outline-none"
-          style={{ border: "1px solid #ECB176", color: "#6F4E37", backgroundColor: "white" }}
-        />
-      </div>
 
       {/* Modal Edit */}
       {editData && (

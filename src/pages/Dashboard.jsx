@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { Users, ClipboardList, AlertTriangle, Clock } from "lucide-react";
 import { db } from "../firebase";
-import { collection, getDocs } from "firebase/firestore";
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { collection, getDocs, doc, getDoc } from "firebase/firestore";
+// PieChart and other recharts imports removed as per PRD
 import { useNavigate } from 'react-router-dom';
 
 export default function Dashboard() {
@@ -18,114 +18,144 @@ export default function Dashboard() {
 
   const [stats, setStats] = useState({
     totalKaryawan: 0,
-    hariHadir: 0,
+    totalFreelance: 0,
     totalAnomali: 0,
-    totalLembur: 0,
-    ringkasanAnomali: {},
-    ringkasanIzin: {},
+    totalIzin: 0,
+    keterlambatanList: [],
+    izinList: [],
+    debug: {}
   });
   const [loading, setLoading] = useState(true);
-  const [periodeList, setPeriodeList] = useState([]);
-  const [selectedPeriode, setSelectedPeriode] = useState("semua");
+  const [selectedPeriode, setSelectedPeriode] = useState("");
+  const [allPeriods, setAllPeriods] = useState([]);
+  const [monthPrefix, setMonthPrefix] = useState("");
 
-  const fetchStats = async () => {
-    setLoading(true);
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      // 1. Fetch Config
+      const configSnap = await getDoc(doc(db, "config", "global"));
+      const configData = configSnap.exists() ? configSnap.data() : {};
+      const activeP = configData.periodeAktif || "";
+      const pList = (configData.periodeList || [])
+        .map(p => typeof p === "string" ? p : p.name)
+        .filter(Boolean);
+      setAllPeriods(pList);
+      
+      const targetP = selectedPeriode || activeP;
+      if (!selectedPeriode && activeP) setSelectedPeriode(activeP);
 
-    const karyawanSnap = await getDocs(collection(db, "karyawan"));
-    const totalKaryawan = karyawanSnap.docs.filter(d => d.data().status === "aktif").length;
+      if (!targetP) {
+        setLoading(false);
+        return;
+      }
 
-    const absensiSnap = await getDocs(collection(db, "absensi"));
-    const absensiData = absensiSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const [bulan, tahun] = targetP.split(" ");
+      const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+      const bulanIndex = bulanIndo.indexOf(bulan) + 1;
+      const prefix = (bulanIndex > 0 && tahun) ? `${tahun}-${bulanIndex.toString().padStart(2, "0")}` : "";
+      setMonthPrefix(prefix);
 
-    const periodes = [...new Set(absensiData.map(a => a.periode))].sort();
-    setPeriodeList(periodes);
+      // 2. Fetch Karyawan
+      const karyawanSnap = await getDocs(collection(db, "karyawan"));
+      const karyawanData = karyawanSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const totalKaryawan = karyawanData.filter(d => d.status === "aktif" && d.tipe === "tetap").length;
+      const totalFreelance = karyawanData.filter(d => d.status === "aktif" && d.tipe === "freelance").length;
 
-    const filtered = selectedPeriode === "semua"
-      ? absensiData
-      : absensiData.filter(a => a.periode === selectedPeriode);
+      // 3. Fetch Anomali
+      const anomaliSnap = await getDocs(collection(db, "anomali"));
+      const anomaliData = anomaliSnap.docs.map(d => d.data());
+      const filteredAnomali = anomaliData.filter(a => prefix && a.tanggal?.startsWith(prefix));
+      const totalAnomali = filteredAnomali.filter(a => 
+        a.status === "belum" && 
+        (a.jenis === "Tidak Hadir" || a.jenis === "Scan Tidak Lengkap")
+      ).length;
 
-    const hariHadir = filtered.reduce((sum, a) => sum + (a.rekap?.hariHadir || 0), 0);
-    const totalLembur = filtered.reduce((sum, a) => sum + (a.rekap?.totalJamLembur || 0), 0);
+      // Ringkasan Keterlambatan
+      const keterlambatanMap = {};
+      filteredAnomali.filter(a => a.jenis === "Terlambat").forEach(a => {
+        const key = `${a.userId || "N/A"}_${a.nama || "Tanpa Nama"}`;
+        keterlambatanMap[key] = (keterlambatanMap[key] || 0) + 1;
+      });
+      const keterlambatanList = Object.entries(keterlambatanMap).map(([key, count]) => {
+        const [userId, nama] = key.split("_");
+        return { userId, nama, count };
+      }).sort((a, b) => b.count - a.count);
 
-    const anomaliSnap = await getDocs(collection(db, "anomali"));
-    const anomaliData = anomaliSnap.docs.map(d => d.data());
-    const filteredAnomali = selectedPeriode === "semua"
-      ? anomaliData
-      : anomaliData.filter(a => a.periode === selectedPeriode);
-    const totalAnomali = filteredAnomali.filter(a => a.status === "belum").length;
+      // 4. Fetch Izin
+      const izinSnap = await getDocs(collection(db, "izin"));
+      const izinData = izinSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const filteredIzin = izinData.filter(i => prefix && i.tanggal?.startsWith(prefix));
+      const totalIzin = filteredIzin.length;
 
-    const izinSnap = await getDocs(collection(db, "izin"));
-    const izinData = izinSnap.docs.map(d => d.data());
-    const filteredIzin = selectedPeriode === "semua"
-      ? izinData
-      : izinData.filter(i => {
-          const [, bulan, tahun] = selectedPeriode.split("~")[0].split("-");
-          return i.tanggal?.startsWith(`${tahun}-${bulan}`);
-        });
-
-    const ringkasanIzin = {
-      Izin: filteredIzin.filter(i => i.jenis === "Izin").length,
-      Sakit: filteredIzin.filter(i => i.jenis === "Sakit").length,
-      "Izin Terlambat": filteredIzin.filter(i => i.jenis === "Izin Terlambat").length,
-      "Izin 2 Jam": filteredIzin.filter(i => i.jenis === "Izin 2 Jam").length,
-      Cuti: filteredIzin.filter(i => i.jenis === "Cuti").length,
-    };
-
-    const ringkasanAnomali = {
-      Terlambat: filteredAnomali.filter(a => a.jenis === "Terlambat").length,
-      "Tidak Hadir": filteredAnomali.filter(a => a.jenis === "Tidak Hadir").length,
-      "Pulang Cepat": filteredAnomali.filter(a => a.jenis === "Pulang Cepat").length,
-      "Scan Tidak Lengkap": filteredAnomali.filter(a => a.jenis === "Scan Tidak Lengkap").length,
-    };
-
-    setStats({
-      totalKaryawan,
-      hariHadir,
-      totalAnomali,
-      totalLembur: Math.round(totalLembur * 10) / 10,
-      ringkasanAnomali,
-      ringkasanIzin,
-    });
-    setLoading(false);
+      setStats({
+        totalKaryawan,
+        totalFreelance,
+        totalAnomali,
+        totalIzin,
+        keterlambatanList,
+        izinList: filteredIzin.sort((a, b) => {
+          const dateA = new Date(a.tanggal || 0);
+          const dateB = new Date(b.tanggal || 0);
+          return dateB - dateA;
+        }),
+        debug: {
+          activeP: targetP,
+          monthPrefix: prefix,
+          rawAnomali: anomaliData.length,
+          rawIzin: izinData.length,
+          filteredAnomali: filteredAnomali.length
+        }
+      });
+    } catch (err) {
+      console.error("Dashboard Fetch Error:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { fetchStats(); }, [selectedPeriode]);
+  useEffect(() => { 
+    fetchData(); 
+  }, [selectedPeriode]);
 
   const statCards = [
     { label: "Total Karyawan Aktif", value: stats.totalKaryawan, icon: Users, bg: "#6F4E37", color: "#FED8B1" },
-    { label: "Total Hari Hadir", value: `${stats.hariHadir} Hari`, icon: ClipboardList, bg: "#B17457", color: "#FED8B1" },
+    { label: "Total Freelance Aktif", value: stats.totalFreelance, icon: Users, bg: "#B17457", color: "#FED8B1" },
     { label: "Anomali Belum Dikonfirmasi", value: stats.totalAnomali, icon: AlertTriangle, bg: "#ECB176", color: "#6F4E37" },
-    { label: "Total Lembur", value: `${stats.totalLembur} Jam`, icon: Clock, bg: "#FED8B1", color: "#6F4E37" },
+    { label: "Total Izin Periode Berjalan", value: stats.totalIzin, icon: ClipboardList, bg: "#FED8B1", color: "#6F4E37" },
   ];
 
   return (
     <div className="space-y-6">
 
-      {/* Welcome */}
-      <div className="rounded-xl p-6" style={{ backgroundColor: "#6F4E37" }}>
-        <h2 className="text-2xl font-bold" style={{ color: "#FED8B1" }}>
-          Selamat Datang di RekapIn! 
-        </h2>
-        <p className="mt-1 text-sm" style={{ color: "#ECB176" }}>
-          Sistem Rekap Absensi & Penggajian S&D Project
-        </p>
+      {/* Welcome & Period */}
+      <div className="flex items-center justify-between bg-[#6F4E37] rounded-xl p-6">
+        <div>
+          <h2 className="text-2xl font-bold" style={{ color: "#FED8B1" }}>
+            Selamat Datang di RekapIn! 
+          </h2>
+          <p className="mt-1 text-sm" style={{ color: "#ECB176" }}>
+            Sistem Rekap Absensi & Penggajian S&D Project
+          </p>
+        </div>
+        <div className="text-right flex flex-col items-end gap-2">
+          <div>
+            <p className="text-xs uppercase font-bold" style={{ color: "#ECB176" }}>Periode Aktif</p>
+            <select 
+              value={selectedPeriode}
+              onChange={(e) => setSelectedPeriode(e.target.value)}
+              className="mt-1 bg-white/10 text-[#FED8B1] border border-[#ECB176]/30 rounded px-2 py-1 text-sm outline-none"
+            >
+              <option value="" disabled className="text-black">Pilih Periode</option>
+              {allPeriods.map(p => (
+                <option key={p} value={p} className="text-black">{p}</option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
 
-      {/* Filter Periode */}
-      <div className="flex items-center gap-3">
-        <span className="text-sm font-medium" style={{ color: "#6F4E37" }}>Periode:</span>
-        <select
-          value={selectedPeriode}
-          onChange={e => setSelectedPeriode(e.target.value)}
-          className="px-3 py-2 rounded-lg text-sm outline-none"
-          style={{ border: "1px solid #ECB176", color: "#6F4E37", backgroundColor: "white" }}
-        >
-          <option value="semua">Semua Periode</option>
-          {periodeList.map(p => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
-      </div>
+      {/* Period Filter Removed as per Section 6.2 (Centralized Period) */}
 
       {/* Stats Cards */}
       {loading ? (
@@ -158,82 +188,77 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Ringkasan Anomali & Izin */}
+      {/* Ringkasan Keterlambatan & Izin */}
       {!loading && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-          {/* Ringkasan Anomali */}
-<div className="bg-white rounded-xl p-5 shadow-sm">
-  <h3 className="font-bold text-sm mb-4" style={{ color: "#6F4E37" }}>
-    Ringkasan Anomali
-  </h3>
-  {Object.values(stats.ringkasanAnomali).every(v => v === 0) ? (
-    <p className="text-center text-sm py-8" style={{ color: "#A67B5B" }}>
-      Tidak ada anomali
-    </p>
-  ) : (
-    <ResponsiveContainer width="100%" height={220}>
-      <PieChart>
-        <Pie
-          data={[
-            { name: "Terlambat", value: stats.ringkasanAnomali["Terlambat"] || 0, color: "#856404" },
-            { name: "Tidak Hadir", value: stats.ringkasanAnomali["Tidak Hadir"] || 0, color: "#842029" },
-            { name: "Pulang Cepat", value: stats.ringkasanAnomali["Pulang Cepat"] || 0, color: "#0C5460" },
-            { name: "Scan Tidak Lengkap", value: stats.ringkasanAnomali["Scan Tidak Lengkap"] || 0, color: "#6B21A8" },
-          ].filter(d => d.value > 0)}
-          cx="50%"
-          cy="50%"
-          innerRadius={55}
-          outerRadius={85}
-          paddingAngle={3}
-          dataKey="value"
-          label={({ value }) => `${value}`}
-          labelLine={false}
-        >
-          {[
-            { name: "Terlambat", value: stats.ringkasanAnomali["Terlambat"] || 0, color: "#856404" },
-            { name: "Tidak Hadir", value: stats.ringkasanAnomali["Tidak Hadir"] || 0, color: "#842029" },
-            { name: "Pulang Cepat", value: stats.ringkasanAnomali["Pulang Cepat"] || 0, color: "#0C5460" },
-            { name: "Scan Tidak Lengkap", value: stats.ringkasanAnomali["Scan Tidak Lengkap"] || 0, color: "#6B21A8" },
-          ].filter(d => d.value > 0).map((entry, index) => (
-            <Cell key={index} fill={entry.color} />
-          ))}
-        </Pie>
-        <Tooltip
-          formatter={(value, name) => [`${value} kasus`, name]}
-          contentStyle={{ borderRadius: "8px", border: "1px solid #ECB176", fontSize: "12px" }}
-        />
-        <Legend
-          iconType="circle"
-          iconSize={8}
-          formatter={(value) => <span style={{ fontSize: "11px", color: "#6F4E37" }}>{value}</span>}
-        />
-      </PieChart>
-    </ResponsiveContainer>
-  )}
-</div>
-
-          {/* Ringkasan Izin */}
-          <div className="bg-white rounded-xl p-5 shadow-sm">
-            <h3 className="font-bold text-sm mb-4" style={{ color: "#6F4E37" }}>
-              Ringkasan Izin
+          {/* Ringkasan Keterlambatan */}
+          <div className="lg:col-span-1 bg-white rounded-xl p-6 shadow-sm border border-[#ECB176]">
+            <h3 className="font-bold text-sm mb-4 flex items-center gap-2" style={{ color: "#6F4E37" }}>
+              <Clock size={16} /> Ringkasan Keterlambatan
             </h3>
-            <div className="space-y-2">
-              {[
-                { label: "Izin", bg: "#E8F4FD", color: "#1A5276" },
-                { label: "Sakit", bg: "#F8D7DA", color: "#842029" },
-                { label: "Izin Terlambat", bg: "#FFF3CD", color: "#856404" },
-                { label: "Izin 2 Jam", bg: "#FED8B1", color: "#6F4E37" },
-                { label: "Cuti", bg: "#D4EDDA", color: "#155724" },
-              ].map(item => (
-                <div key={item.label} className="flex items-center justify-between px-3 py-2 rounded-lg"
-                  style={{ backgroundColor: item.bg }}>
-                  <span className="text-xs font-medium" style={{ color: item.color }}>{item.label}</span>
-                  <span className="text-sm font-bold" style={{ color: item.color }}>
-                    {stats.ringkasanIzin[item.label] || 0}
-                  </span>
-                </div>
-              ))}
+            {stats.keterlambatanList.length === 0 ? (
+              <p className="text-center text-xs py-10" style={{ color: "#A67B5B" }}>Tidak ada catatan terlambat</p>
+            ) : (
+              <div className="space-y-3">
+                {stats.keterlambatanList.map((item, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-[#FFF8F0]">
+                    <div>
+                      <p className="text-xs font-bold" style={{ color: "#6F4E37" }}>{item.nama}</p>
+                      <p className="text-[10px]" style={{ color: "#A67B5B" }}>ID: {item.userId}</p>
+                    </div>
+                    <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-[#FED8B1] text-[#6F4E37]">
+                      {item.count} hari terlambat
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Ringkasan Izin (Table) */}
+          <div className="lg:col-span-2 bg-white rounded-xl p-6 shadow-sm border border-[#ECB176]">
+            <h3 className="font-bold text-sm mb-4 flex items-center gap-2" style={{ color: "#6F4E37" }}>
+              <ClipboardList size={16} /> Ringkasan Izin
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b" style={{ color: "#A67B5B" }}>
+                    <th className="pb-2 font-medium">No</th>
+                    <th className="pb-2 font-medium">Karyawan</th>
+                    <th className="pb-2 font-medium">Tanggal</th>
+                    <th className="pb-2 font-medium">Rincian</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.izinList.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="text-center py-10" style={{ color: "#A67B5B" }}>Belum ada data izin</td>
+                    </tr>
+                  ) : (
+                    stats.izinList.map((i, idx) => (
+                      <tr key={i.id} className="border-b last:border-0">
+                        <td className="py-3" style={{ color: "#A67B5B" }}>{idx + 1}</td>
+                        <td className="py-3">
+                          <p className="font-bold" style={{ color: "#6F4E37" }}>{i.nama}</p>
+                          <p className="text-[10px]" style={{ color: "#A67B5B" }}>ID: {i.userId}</p>
+                        </td>
+                        <td className="py-3" style={{ color: "#6F4E37" }}>{i.tanggal}</td>
+                        <td className="py-3">
+                          <span className="px-2 py-1 rounded-full text-[10px] font-bold"
+                            style={{ 
+                              backgroundColor: i.jenis === "Sakit" ? "#F8D7DA" : i.jenis === "Cuti" ? "#D4EDDA" : "#E8F4FD",
+                              color: i.jenis === "Sakit" ? "#842029" : i.jenis === "Cuti" ? "#155724" : "#1A5276"
+                            }}>
+                            {i.jenis}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -241,7 +266,7 @@ export default function Dashboard() {
       )}
 
       {/* Info kalau belum ada data */}
-      {!loading && stats.hariHadir === 0 && (
+      {!loading && stats.totalKaryawan === 0 && (
         <div className="rounded-xl p-6 text-center"
           style={{ backgroundColor: "white", border: "2px dashed #ECB176" }}>
           <ClipboardList size={40} className="mx-auto mb-3" style={{ color: "#ECB176" }} />
@@ -252,6 +277,12 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Debug Bar */}
+      {!loading && (
+        <div className="mt-8 p-4 bg-gray-50 border rounded-xl text-[10px] font-mono text-gray-400">
+          DEBUG: ActiveP({stats.debug?.activeP}) | Prefix({stats.debug?.monthPrefix}) | Raw({stats.debug?.rawAnomali}) | Match({stats.debug?.filteredAnomali})
+        </div>
+      )}
     </div>
   );
 }

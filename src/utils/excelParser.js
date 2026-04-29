@@ -1,5 +1,27 @@
 import * as XLSX from "xlsx";
 
+// Helper untuk format tanggal M/D/YYYY ke YYYY-MM-DD
+const parseDate = (val) => {
+  if (!val) return null;
+  
+  // Jika Excel membacanya sebagai Serial Number (number)
+  if (typeof val === "number") {
+    const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+    return date.toISOString().split("T")[0];
+  }
+
+  // Jika string M/D/YYYY atau YYYY-MM-DD
+  if (typeof val === "string") {
+    if (val.includes("/")) {
+      const [m, d, y] = val.split("/");
+      return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+    }
+    if (val.includes("-")) return val; // Sudah format YYYY-MM-DD
+  }
+
+  return null;
+};
+
 // Konversi nilai waktu ke string "HH:MM"
 const formatTime = (val) => {
   if (val === null || val === undefined) return null;
@@ -223,24 +245,7 @@ export const deteksiAnomali = (dailyData, periode, sabtuFullTime = false) => {
           tanggalLabel: day.tanggal,
           jenis: "Terlambat",
           keterangan: `Masuk jam ${day.jamMasukPagi} (batas 08:10)`,
-          status: "belum",
-        });
-      }
-    }
-
-    // Pulang cepat
-    if (day.jamKeluarPagi) {
-      const [h, m] = day.jamKeluarPagi.split(":").map(Number);
-      const menitKeluar = h * 60 + m;
-      const [bH, bM] = jamSelesai.split(":").map(Number);
-      const batasKeluar = bH * 60 + bM;
-      if (menitKeluar < batasKeluar) {
-        anomali.push({
-          tanggal: tanggalLengkap,
-          tanggalLabel: day.tanggal,
-          jenis: "Pulang Cepat",
-          keterangan: `Keluar jam ${day.jamKeluarPagi} (batas ${jamSelesai})`,
-          status: "belum",
+          status: "dikonfirmasi", // Auto-confirmed, just for stats
         });
       }
     }
@@ -269,7 +274,84 @@ if (hanyaMasuk || hanyaKeluar) {
 export const parseTanggalLengkap = (tanggalRow, periode) => {
   if (!tanggalRow || !periode) return null;
   const [start] = periode.split("~");
-  const [, bulan, tahun] = start.split("-");
+  // Robust date extraction (matches YYYY/MM/DD, DD-MM-YYYY, etc.)
+  const parts = start.trim().split(/[-/]/);
+  let y, m, d;
+
+  if (parts[0].length === 4) {
+    // YYYY-MM-DD
+    [y, m, d] = parts;
+  } else if (parts[2].length === 4) {
+    // DD-MM-YYYY
+    [d, m, y] = parts;
+  } else {
+    // Fallback default
+    [y, m, d] = parts;
+  }
+
   const tgl = tanggalRow.split(" ")[0];
-  return `${tahun}-${bulan.padStart(2, "0")}-${tgl.padStart(2, "0")}`;
+  return `${y}-${m.padStart(2, "0")}-${tgl.padStart(2, "0")}`;
+};
+
+// Parser untuk Data Izin (Bulk)
+export const parseIzinExcel = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array", cellDates: false });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+        // Mulai dari baris 2 (index 1) karena baris 1 header
+        const results = [];
+        const validTypes = ["izin", "cuti", "sakit", "setengah hari (siang)", "setengah hari (pagi)"];
+
+        for (let i = 1; i < data.length; i++) {
+          const row = data[i];
+          if (!row || row.length === 0) continue;
+
+          const userIdRaw = row[1];
+          const nama = row[2] || "";
+          const jenisRaw = row[3]?.toString()?.toLowerCase()?.trim() || "";
+          const tglMulai = parseDate(row[4]);
+          const tglSelesai = (row[5] === "-" || !row[5]) ? tglMulai : parseDate(row[5]);
+          const jamMulai = row[6] === "-" ? null : formatTime(row[6]);
+          const jamSelesai = row[7] === "-" ? null : formatTime(row[7]);
+          const totalHari = parseFloat(row[8]) || 0;
+          const keterangan = row[9] || "";
+
+          const userId = userIdRaw?.toString()?.replace(/^0+/, "") || "";
+          if (!userId) continue;
+
+          // Validasi tipe
+          const isValidType = validTypes.includes(jenisRaw);
+          const errors = [];
+          if (!isValidType) errors.push(`Jenis izin '${row[3]}' tidak valid`);
+          if (!tglMulai) errors.push("Tanggal mulai tidak valid");
+          if (totalHari <= 0) errors.push("Total hari harus lebih dari 0");
+
+          results.push({
+            userId,
+            nama,
+            jenis: row[3] || "Izin", // Simpan label aslinya
+            tanggal: tglMulai,
+            tglMulai,
+            tglSelesai,
+            jamMulai,
+            jamSelesai,
+            totalHari,
+            keterangan,
+            errors,
+            isValid: errors.length === 0
+          });
+        }
+        resolve(results);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
 };
