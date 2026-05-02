@@ -1,23 +1,6 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-
-// Fungsi Konversi Angka ke Huruf (Terbilang)
-const terbilang = (n) => {
-  if (n < 0) return "Minus " + terbilang(Math.abs(n));
-  if (n === 0) return "Nol";
-  const units = ["", "Satu", "Dua", "Tiga", "Empat", "Lima", "Enam", "Tujuh", "Delapan", "Sembilan", "Sepuluh", "Sebelas"];
-  let res = "";
-  if (n < 12) res = units[n];
-  else if (n < 20) res = terbilang(n - 10) + " Belas";
-  else if (n < 100) res = terbilang(Math.floor(n / 10)) + " Puluh " + terbilang(n % 10);
-  else if (n < 200) res = "Seratus " + terbilang(n - 100);
-  else if (n < 1000) res = terbilang(Math.floor(n / 100)) + " Ratus " + terbilang(n % 100);
-  else if (n < 2000) res = "Seribu " + terbilang(n - 1000);
-  else if (n < 1000000) res = terbilang(Math.floor(n / 1000)) + " Ribu " + terbilang(n % 1000);
-  else if (n < 1000000000) res = terbilang(Math.floor(n / 1000000)) + " Juta " + terbilang(n % 1000000);
-  else if (n < 1000000000000) res = terbilang(Math.floor(n / 1000000000)) + " Miliar " + terbilang(n % 1000000000);
-  return res.replace(/  +/g, ' ').trim();
-};
+import { terbilang } from "./terbilang";
 
 export const exportRekapGaji = (gajiData, periode) => {
   const doc = new jsPDF();
@@ -166,7 +149,7 @@ export const exportSlipGajiPDF = (dataList, filename, layout = 1, config = {}, m
 
     leftY = drawRow("Gaji Pokok", data.gajiPokok || 0, margin + 5, leftY);
     if ((data.upahLembur || 0) > 0) {
-      leftY = drawRow(`Lembur (${(data.totalJamLembur || 0).toFixed(1)} jam)`, data.upahLembur, margin + 5, leftY);
+      leftY = drawRow("Lembur", data.upahLembur, margin + 5, leftY);
     }
     (data.bonusList || []).forEach(b => {
       leftY = drawRow(b.nama, b.nominal, margin + 5, leftY);
@@ -200,7 +183,7 @@ export const exportSlipGajiPDF = (dataList, filename, layout = 1, config = {}, m
     doc.setFontSize(7);
     doc.setFont("helvetica", "italic");
     doc.setTextColor(100);
-    const kataTerbilang = terbilang(Math.floor(data.takeHomePay || 0)) + " Rupiah";
+    const kataTerbilang = terbilang(Math.floor(data.takeHomePay || 0));
     doc.text(`Terbilang: ${kataTerbilang}`, margin + 5, thpY + 4);
     doc.setTextColor(0);
 

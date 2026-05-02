@@ -4,6 +4,7 @@ import { db } from "../firebase";
 import { collection, getDocs, deleteDoc, doc, getDoc, addDoc, updateDoc } from "firebase/firestore";
 import { exportRekapAbsen } from "../utils/exportExcel";
 import { exportRekapGaji } from "../utils/exportPDF";
+import { terbilang } from "../utils/terbilang";
 
 export default function Gaji() {
   const [absensiData, setAbsensiData] = useState([]);
@@ -18,10 +19,12 @@ export default function Gaji() {
   const [izinData, setIzinData] = useState([]);
   const [komponenData, setKomponenData] = useState([]);
   const [activeDetailTab, setActiveDetailTab] = useState({});
-  const [bonusForm, setBonusForm] = useState({ nama: "", nominal: "", keterangan: "", tipe: "one-time" });
-  const [potonganForm, setPotonganForm] = useState({ nama: "", nominal: "", keterangan: "" });
+  const [bonusForm, setBonusForm] = useState({ nama: "", nominal: "", tipe: "one-time" });
+  const [potonganForm, setPotonganForm] = useState({ nama: "", nominal: "" });
   const [editIzinMode, setEditIzinMode] = useState(null);
   const [manualIzinValue, setManualIzinValue] = useState("");
+  const [editLemburMode, setEditLemburMode] = useState(null);
+  const [manualLemburValue, setManualLemburValue] = useState("");
 
   const fetchData = async () => {
     try {
@@ -80,7 +83,6 @@ export default function Gaji() {
         kategori,
         nama: form.nama,
         nominal: Number(form.nominal),
-        keterangan: form.keterangan || "",
         periode: isBonus && form.tipe === "recurring" ? "" : gajiItem.periode,
         tipe: isBonus ? form.tipe : "one-time",
         createdAt: new Date().toISOString()
@@ -88,8 +90,8 @@ export default function Gaji() {
       
       await addDoc(collection(db, "komponenGaji"), payload);
       
-      if (isBonus) setBonusForm({ nama: "", nominal: "", keterangan: "", tipe: "one-time" });
-      else setPotonganForm({ nama: "", nominal: "", keterangan: "" });
+      if (isBonus) setBonusForm({ nama: "", nominal: "", tipe: "one-time" });
+      else setPotonganForm({ nama: "", nominal: "" });
       
       fetchData();
     } catch (err) {
@@ -147,6 +149,46 @@ export default function Gaji() {
     }
   };
 
+  const handleSaveLemburManual = async (gajiItem) => {
+    try {
+      const value = parseFloat(manualLemburValue);
+      if (isNaN(value) || value < 0) return alert("Nilai tidak valid. Harus angka >= 0.");
+      
+      await updateDoc(doc(db, "absensi", gajiItem.id), {
+        isManualLembur: true,
+        manualUpahLembur: value
+      });
+      
+      await addDoc(collection(db, "auditLogs"), {
+        action: "EDIT_UPAH_LEMBUR",
+        userId: gajiItem.userId,
+        periode: gajiItem.periode,
+        adminId: "admin", 
+        oldValue: gajiItem.upahLembur,
+        newValue: value,
+        timestamp: new Date().toISOString()
+      });
+      
+      setEditLemburMode(null);
+      fetchData();
+    } catch (err) {
+      console.error("Save lembur manual error:", err);
+    }
+  };
+
+  const handleResetLemburManual = async (gajiItem) => {
+    if (!window.confirm("Kembalikan ke hitungan otomatis?")) return;
+    try {
+      await updateDoc(doc(db, "absensi", gajiItem.id), {
+        isManualLembur: false,
+        manualUpahLembur: 0
+      });
+      fetchData();
+    } catch (err) {
+      console.error("Reset lembur manual error:", err);
+    }
+  };
+
   // Gabungkan absensi dengan data karyawan
   const gajiList = absensiData.map(absensi => {
     try {
@@ -196,9 +238,14 @@ export default function Gaji() {
       const tarifJam = Number(karyawan?.tarifJam || 0);
       const totalJamKerja = absensi.rekap?.totalJamKerja || 0;
       const totalJamLembur = absensi.rekap?.totalJamLembur || 0;
+      const totalLemburKasar = absensi.rekap?.totalLemburKasar || 0;
+      const totalPenguranganLembur = absensi.rekap?.totalPenguranganLembur || 0;
       
       const gajiPokok = Number(karyawan?.gajiPokok || 0);
-      const upahLembur = totalJamLembur * tarifJam;
+      let upahLembur = totalJamLembur * tarifJam;
+      if (absensi.isManualLembur) {
+        upahLembur = Number(absensi.manualUpahLembur || 0);
+      }
       
       const potBPJS = karyawan.tipe === "tetap" ? Number(karyawan.potonganBPJSTetap || 0) : 0;
       let totalHariPotonganIzin = karyawan.tipe === "freelance" ? 0 : (counts.Izin + counts.Setengah);
@@ -240,9 +287,12 @@ export default function Gaji() {
         periode: displayPeriode,
         totalJamKerja,
         totalJamLembur,
+        totalLemburKasar,
+        totalPenguranganLembur,
         tarifJam,
         gajiPokok,
         upahLembur,
+        isManualLembur: absensi.isManualLembur,
         potBPJS,
         potIzin,
         totalHariPotonganIzin,
@@ -440,20 +490,22 @@ export default function Gaji() {
                     <>
                       {/* Summary row */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                        <div className="rounded-lg p-3 bg-[#fffaf5]">
-                          <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Ringkasan Izin</p>
-                          <div className="grid grid-cols-2 gap-1 mt-1 text-[11px] font-medium" style={{ color: "#6F4E37" }}>
-                            <span>Izin: {g.counts.Izin}</span>
-                            <span>Sakit: {g.counts.Sakit}</span>
-                            <span>Cuti: {g.counts.Cuti}</span>
-                            <span>1/2 Hari: {g.counts.Setengah}</span>
-                          </div>
-                        </div>
                         {g.tipe === "tetap" && (
-                          <div className="rounded-lg p-3 bg-[#fffaf5]">
-                            <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Sisa Cuti</p>
-                            <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.saldoCuti} Hari</p>
-                          </div>
+                          <>
+                            <div className="rounded-lg p-3 bg-[#fffaf5]">
+                              <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Ringkasan Izin</p>
+                              <div className="grid grid-cols-2 gap-1 mt-1 text-[11px] font-medium" style={{ color: "#6F4E37" }}>
+                                <span>Izin: {g.counts.Izin}</span>
+                                <span>Sakit: {g.counts.Sakit}</span>
+                                <span>Cuti: {g.counts.Cuti}</span>
+                                <span>1/2 Hari: {g.counts.Setengah}</span>
+                              </div>
+                            </div>
+                            <div className="rounded-lg p-3 bg-[#fffaf5]">
+                              <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Sisa Cuti</p>
+                              <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.saldoCuti} Hari</p>
+                            </div>
+                          </>
                         )}
                         <div className="rounded-lg p-3 bg-[#fffaf5]">
                           <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Kehadiran</p>
@@ -475,9 +527,51 @@ export default function Gaji() {
                               <span style={{ color: "#A67B5B" }}>Gaji Pokok</span>
                               <span className="font-medium" style={{ color: "#6F4E37" }}>Rp {g.gajiPokok.toLocaleString("id-ID")}</span>
                             </div>
-                            <div className="flex justify-between text-sm">
-                              <span style={{ color: "#A67B5B" }}>Upah Lembur ({g.totalJamLembur.toFixed(1)} jam)</span>
+                            <div className="flex justify-between text-sm items-center">
+                              <span style={{ color: "#A67B5B" }}>
+                                Upah Lembur {g.isManualLembur && <span className="text-[9px] ml-1 bg-yellow-100 text-yellow-800 px-1 rounded">Manual</span>}
+                                {editLemburMode === g.id ? (
+                                    <div className="mt-1 flex items-center gap-2">
+                                      Rp <input 
+                                        type="number" min="0" step="1000"
+                                        value={manualLemburValue}
+                                        onChange={e => setManualLemburValue(e.target.value)}
+                                        className="w-24 px-1 border rounded text-xs"
+                                        style={{ borderColor: "#ECB176" }}
+                                      />
+                                      <button onClick={() => handleSaveLemburManual(g)} className="text-xs text-green-600 font-bold hover:underline">Simpan</button>
+                                      <button onClick={() => setEditLemburMode(null)} className="text-xs text-red-600 font-bold hover:underline">Batal</button>
+                                    </div>
+                                ) : (
+                                  <>
+                                    <button onClick={() => { setEditLemburMode(g.id); setManualLemburValue(g.upahLembur); }} className="text-xs text-blue-500 hover:underline ml-2">Edit</button>
+                                    {g.isManualLembur && (
+                                      <button onClick={() => handleResetLemburManual(g)} className="text-xs text-gray-500 underline ml-2">Reset ke Otomatis</button>
+                                    )}
+                                  </>
+                                )}
+                              </span>
                               <span className="font-medium" style={{ color: "#6F4E37" }}>Rp {g.upahLembur.toLocaleString("id-ID")}</span>
+                            </div>
+                            <div className="flex flex-col text-xs border p-2 rounded-lg mt-1" style={{ borderColor: "#ECB176", backgroundColor: "#fffaf5" }}>
+                                <div className="flex justify-between mb-1">
+                                  <span style={{ color: "#A67B5B" }}>Total Lembur Kasar:</span>
+                                  <span className="font-medium" style={{ color: "#6F4E37" }}>
+                                    {Math.floor(g.totalLemburKasar || 0)} jam {Math.round(((g.totalLemburKasar || 0) % 1) * 60)} menit
+                                  </span>
+                                </div>
+                                <div className="flex justify-between mb-1">
+                                  <span style={{ color: "#A67B5B" }}>Pengurangan Keterlambatan:</span>
+                                  <span className="font-medium text-red-600">
+                                    {Math.floor(g.totalPenguranganLembur || 0)} jam {Math.round(((g.totalPenguranganLembur || 0) % 1) * 60)} menit
+                                  </span>
+                                </div>
+                                <div className="flex justify-between border-t pt-1 mt-1" style={{ borderColor: "#FED8B1" }}>
+                                  <span className="font-bold" style={{ color: "#A67B5B" }}>Lembur Diakui:</span>
+                                  <span className="font-bold" style={{ color: "#6F4E37" }}>
+                                    {Math.floor(g.totalJamLembur || 0)} jam {Math.round(((g.totalJamLembur || 0) % 1) * 60)} menit
+                                  </span>
+                                </div>
                             </div>
                             {g.bonusList && g.bonusList.map((b, i) => (
                               <div key={`bonus-${i}`} className="flex justify-between text-sm">
@@ -538,11 +632,16 @@ export default function Gaji() {
                       </div>
 
                       {/* Total */}
-                      <div className="flex justify-between items-center mt-6 pt-3"
+                      <div className="flex flex-col items-end mt-6 pt-3"
                         style={{ borderTop: "2px solid #FED8B1" }}>
-                        <p className="text-sm font-bold" style={{ color: "#6F4E37" }}>Take Home Pay</p>
-                        <p className="text-xl font-bold" style={{ color: "#6F4E37" }}>
-                          Rp {g.takeHomePay.toLocaleString("id-ID")}
+                        <div className="flex justify-between items-center w-full">
+                          <p className="text-sm font-bold" style={{ color: "#6F4E37" }}>Take Home Pay</p>
+                          <p className="text-xl font-bold" style={{ color: "#6F4E37" }}>
+                            Rp {g.takeHomePay.toLocaleString("id-ID")}
+                          </p>
+                        </div>
+                        <p className="text-xs italic mt-1" style={{ color: "#A67B5B" }}>
+                          Terbilang: {terbilang(Math.floor(g.takeHomePay))}
                         </p>
                       </div>
                     </>
@@ -560,11 +659,7 @@ export default function Gaji() {
                           <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Nominal</label>
                           <input type="number" value={bonusForm.nominal} onChange={e => setBonusForm({...bonusForm, nominal: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="0" />
                         </div>
-                        <div className="flex-1 min-w-[150px]">
-                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Keterangan</label>
-                          <input type="text" value={bonusForm.keterangan} onChange={e => setBonusForm({...bonusForm, keterangan: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="Opsional" />
-                        </div>
-                        <div className="flex-none w-24">
+                        <div className="flex-none w-32">
                           <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Tipe</label>
                           <select value={bonusForm.tipe} onChange={e => setBonusForm({...bonusForm, tipe: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none bg-white">
                             <option value="one-time">One-time</option>
@@ -582,7 +677,6 @@ export default function Gaji() {
                             <tr className="border-b" style={{ borderColor: "#FED8B1", color: "#A67B5B" }}>
                               <th className="py-2 font-medium">Nama Bonus</th>
                               <th className="py-2 font-medium">Nominal</th>
-                              <th className="py-2 font-medium">Keterangan</th>
                               <th className="py-2 font-medium">Tipe</th>
                               <th className="py-2 font-medium">Aksi</th>
                             </tr>
@@ -593,7 +687,6 @@ export default function Gaji() {
                               <tr key={b.id} className="border-b last:border-0" style={{ borderColor: "#fef3e9" }}>
                                 <td className="py-2" style={{ color: "#6F4E37" }}>{b.nama}</td>
                                 <td className="py-2" style={{ color: "#6F4E37" }}>Rp {Number(b.nominal).toLocaleString("id-ID")}</td>
-                                <td className="py-2 text-xs" style={{ color: "#A67B5B" }}>{b.keterangan || "-"}</td>
                                 <td className="py-2 text-xs" style={{ color: "#A67B5B" }}>{b.tipe === "recurring" ? "Recurring" : "One-time"}</td>
                                 <td className="py-2">
                                   <button onClick={() => handleDeleteKomponen(b.id)} className="text-red-500 text-xs font-medium hover:underline">Hapus</button>
@@ -618,10 +711,6 @@ export default function Gaji() {
                           <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Nominal</label>
                           <input type="number" value={potonganForm.nominal} onChange={e => setPotonganForm({...potonganForm, nominal: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="0" />
                         </div>
-                        <div className="flex-1 min-w-[150px]">
-                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Keterangan</label>
-                          <input type="text" value={potonganForm.keterangan} onChange={e => setPotonganForm({...potonganForm, keterangan: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="Opsional" />
-                        </div>
                         <button onClick={() => handleSaveKomponen(g, "potongan")} className="px-4 py-1.5 rounded text-sm font-medium h-[30px]" style={{ backgroundColor: "#6F4E37", color: "white" }}>
                           Simpan
                         </button>
@@ -633,7 +722,6 @@ export default function Gaji() {
                             <tr className="border-b" style={{ borderColor: "#FED8B1", color: "#A67B5B" }}>
                               <th className="py-2 font-medium">Nama Potongan</th>
                               <th className="py-2 font-medium">Nominal</th>
-                              <th className="py-2 font-medium">Keterangan</th>
                               <th className="py-2 font-medium">Aksi</th>
                             </tr>
                           </thead>
@@ -643,7 +731,6 @@ export default function Gaji() {
                               <tr key={p.id} className="border-b last:border-0" style={{ borderColor: "#fef3e9" }}>
                                 <td className="py-2" style={{ color: "#6F4E37" }}>{p.nama}</td>
                                 <td className="py-2 text-red-600">Rp {Number(p.nominal).toLocaleString("id-ID")}</td>
-                                <td className="py-2 text-xs" style={{ color: "#A67B5B" }}>{p.keterangan || "-"}</td>
                                 <td className="py-2">
                                   <button onClick={() => handleDeleteKomponen(p.id)} className="text-red-500 text-xs font-medium hover:underline">Hapus</button>
                                 </td>

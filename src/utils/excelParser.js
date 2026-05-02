@@ -129,9 +129,11 @@ const hitungJamKerja = (masuk, keluar) => {
 };
 
 // Hitung rekap per karyawan
-const hitungRekap = (dailyData, periode) => {
+export const hitungRekap = (dailyData, periode) => {
   let totalJamKerja = 0;
   let totalJamLembur = 0;
+  let totalLemburKasar = 0;
+  let totalPenguranganLembur = 0;
   let hariHadir = 0;
   let hariTidakHadir = 0;
 
@@ -147,6 +149,8 @@ const hitungRekap = (dailyData, periode) => {
       const jamPagi = hitungJamKerja(day.jamMasukPagi, day.jamKeluarPagi);
       const jamSiang = hitungJamKerja(day.jamMasukSiang, day.jamKeluarSiang);
       let jamLembur = hitungJamKerja(day.jamMasukLembur, day.jamKeluarLembur);
+      totalLemburKasar += jamLembur;
+      let pengurangan = 0;
 
       // Kurangi lembur berdasarkan keterlambatan (Rule 4.4)
       if (day.jamMasukPagi) {
@@ -155,10 +159,15 @@ const hitungRekap = (dailyData, periode) => {
         const batasMasuk = 8 * 60; // 08:00
         if (menitMasuk > batasMasuk) {
           const menitTerlambat = menitMasuk - batasMasuk;
-          jamLembur = Math.max(0, jamLembur - (menitTerlambat / 60));
+          const jamTerlambat = menitTerlambat / 60;
+          if (jamLembur > 0) {
+            pengurangan = Math.min(jamLembur, jamTerlambat);
+          }
+          jamLembur = Math.max(0, jamLembur - jamTerlambat);
         }
       }
 
+      totalPenguranganLembur += pengurangan;
       totalJamKerja += jamPagi + jamSiang + jamLembur;
       totalJamLembur += jamLembur;
     } else {
@@ -169,6 +178,8 @@ const hitungRekap = (dailyData, periode) => {
   return {
     totalJamKerja: Math.round(totalJamKerja * 100) / 100,
     totalJamLembur: Math.round(totalJamLembur * 100) / 100,
+    totalLemburKasar: Math.round(totalLemburKasar * 100) / 100,
+    totalPenguranganLembur: Math.round(totalPenguranganLembur * 100) / 100,
     hariHadir,
     hariTidakHadir,
   };

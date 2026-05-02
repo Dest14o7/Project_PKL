@@ -100,32 +100,20 @@ export default function Absensi() {
       // 1. Hapus Absensi
       const qAbs = query(collection(db, "absensi"), where("periode", "==", selectedPeriode));
       const snapAbs = await getDocs(qAbs);
-      for (const d of snapAbs.docs) await deleteDoc(doc(db, "absensi", d.id));
-
-      // Hapus juga format lama jika ada (antisipasi duplikasi format)
-      // Kita cari yang periodenya mengandung tahun-bulan yang sama jika memungkinkan
-      // Tapi cara paling aman adalah menghapus yang benar-benar sama dengan selectedPeriode
-
-      // 2. Hapus Anomali
-      // Kita hapus anomali yang periodenya cocok dengan selectedPeriode
-      const qAnom = query(collection(db, "anomali"), where("periode", "==", selectedPeriode));
-      const snapAnom = await getDocs(qAnom);
-      for (const d of snapAnom.docs) await deleteDoc(doc(db, "anomali", d.id));
-
-      // Tambahan: Hapus anomali berdasarkan prefix tanggal agar bersih total (format lama vs baru)
-      const [bulan, tahun] = selectedPeriode.split(" ");
-      const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-      const bulanIndex = bulanIndo.indexOf(bulan) + 1;
-      if (bulanIndex > 0 && tahun) {
-        const prefix = `${tahun}-${bulanIndex.toString().padStart(2, "0")}`;
-        const allAnom = await getDocs(collection(db, "anomali"));
-        for (const d of allAnom.docs) {
-          const data = d.data();
-          if (data.tanggal?.startsWith(prefix)) {
-             await deleteDoc(doc(db, "anomali", d.id));
-          }
-        }
+      let deletedCount = 0;
+      for (const d of snapAbs.docs) {
+        await deleteDoc(doc(db, "absensi", d.id));
+        deletedCount++;
       }
+
+      // Catat ke auditLog
+      await addDoc(collection(db, "auditLogs"), {
+        action: "RESET_ABSENSI",
+        periode: selectedPeriode,
+        adminId: "admin", // Placeholder for actual logged in admin
+        deletedCount,
+        timestamp: new Date().toISOString()
+      });
 
       alert(`Data periode ${selectedPeriode} berhasil direset!`);
       fetchAbsensi();
@@ -204,6 +192,23 @@ export default function Absensi() {
 
         for (const anomali of (emp.anomali || [])) {
           if (isFreelance && anomali.jenis === "Tidak Hadir") continue;
+          const qAnomali = query(
+            collection(db, "anomali"),
+            where("userId", "==", normalizedId),
+            where("tanggal", "==", anomali.tanggal)
+          );
+          const existingAnomali = await getDocs(qAnomali);
+
+          if (!existingAnomali.empty) {
+            // Jika ada duplikat sebelumnya, bersihkan agar tidak terdouble
+            if (existingAnomali.docs.length > 1) {
+              for (let i = 1; i < existingAnomali.docs.length; i++) {
+                await deleteDoc(doc(db, "anomali", existingAnomali.docs[i].id));
+              }
+            }
+            continue; // Skip jika sudah ada agar status konfirmasi lama tidak hilang
+          }
+
           const izinCocok = izinData.find(i =>
             i.userId?.toString()?.replace(/^0+/, "") === normalizedId &&
             i.tanggal === anomali.tanggal

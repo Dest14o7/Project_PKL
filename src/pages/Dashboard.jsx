@@ -65,7 +65,7 @@ export default function Dashboard() {
       // 3. Fetch Anomali
       const anomaliSnap = await getDocs(collection(db, "anomali"));
       const anomaliData = anomaliSnap.docs.map(d => d.data());
-      const filteredAnomali = anomaliData.filter(a => prefix && a.tanggal?.startsWith(prefix));
+      const filteredAnomali = anomaliData.filter(a => a.periode === targetP);
       const totalAnomali = filteredAnomali.filter(a => 
         a.status === "belum" && 
         (a.jenis === "Tidak Hadir" || a.jenis === "Scan Tidak Lengkap")
@@ -88,13 +88,32 @@ export default function Dashboard() {
       const filteredIzin = izinData.filter(i => prefix && i.tanggal?.startsWith(prefix));
       const totalIzin = filteredIzin.length;
 
+      const formatIzinDate = (izin) => {
+        const formatDateStr = (dateStr) => {
+          if (!dateStr) return "";
+          if (dateStr.includes("-") && dateStr.split("-")[0].length === 2) return dateStr;
+          if (dateStr.includes("-") && dateStr.split("-")[0].length === 4) {
+            const [y, m, d] = dateStr.split("-");
+            return `${d}-${m}-${y}`;
+          }
+          return dateStr;
+        };
+        const t1 = formatDateStr(izin.tglMulai || izin.tanggal);
+        const t2 = formatDateStr(izin.tglSelesai);
+        
+        if (izin.totalHari > 1 && t2 && t1 !== t2) {
+          return `${t1} – ${t2}`;
+        }
+        return t1;
+      };
+
       setStats({
         totalKaryawan,
         totalFreelance,
         totalAnomali,
         totalIzin,
         keterlambatanList,
-        izinList: filteredIzin.sort((a, b) => {
+        izinList: filteredIzin.map(i => ({...i, displayDate: formatIzinDate(i)})).sort((a, b) => {
           const dateA = new Date(a.tanggal || 0);
           const dateB = new Date(b.tanggal || 0);
           return dateB - dateA;
@@ -244,7 +263,7 @@ export default function Dashboard() {
                           <p className="font-bold" style={{ color: "#6F4E37" }}>{i.nama}</p>
                           <p className="text-[10px]" style={{ color: "#A67B5B" }}>ID: {i.userId}</p>
                         </td>
-                        <td className="py-3" style={{ color: "#6F4E37" }}>{i.tanggal}</td>
+                        <td className="py-3" style={{ color: "#6F4E37" }}>{i.displayDate || i.tanggal}</td>
                         <td className="py-3">
                           <span className="px-2 py-1 rounded-full text-[10px] font-bold"
                             style={{ 
