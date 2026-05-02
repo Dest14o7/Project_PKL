@@ -33,12 +33,28 @@ export default function Absensi() {
     fetchConfig();
   }, []);
 
+  // Fungsi bantu normalisasi periode
+  const normalizePeriode = (rawPeriode) => {
+    let p = rawPeriode || "";
+    if (p.includes("~")) {
+      const [start] = p.split("~");
+      const parts = start.trim().split(/[-/]/);
+      let y, m;
+      if (parts[0]?.length === 4) { [y, m] = parts; }
+      else if (parts[2]?.length === 4) { [m, , y] = [parts[1], parts[0], parts[2]]; }
+      if (y && m) {
+        const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+        p = `${bulanIndo[parseInt(m) - 1] || "Bulan"} ${y}`;
+      }
+    }
+    return p;
+  };
+
   const fetchAbsensi = async () => {
+    if (!selectedPeriode) return;
     try {
-      if (!selectedPeriode) return;
-      const q = query(collection(db, "absensi"), where("periode", "==", selectedPeriode));
-      const snapshot = await getDocs(q);
-      const allAbsensi = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      const snap = await getDocs(collection(db, "absensi"));
+      const allAbsensi = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       // Ambil data karyawan untuk filter status aktif
       const karyawanSnap = await getDocs(collection(db, "karyawan"));
@@ -49,6 +65,7 @@ export default function Absensi() {
       );
 
       const filtered = allAbsensi.filter(abs => 
+        normalizePeriode(abs.periode) === selectedPeriode &&
         activeUserIds.has(abs.userId?.toString()?.trim()?.replace(/^0+/, ""))
       );
 
@@ -92,18 +109,36 @@ export default function Absensi() {
 
   const handleReset = async () => {
     if (!selectedPeriode) return alert("Pilih periode yang akan direset!");
-    if (!confirm(`Hapus SEMUA data absensi & anomali untuk periode ${selectedPeriode}?`)) return;
+    if (!confirm(`Hapus HANYA data absensi untuk periode ${selectedPeriode}? Data lain (Izin, Anomali, Penggajian) tidak akan terpengaruh.`)) return;
     
     setIsLoading(true);
     
     try {
+      const normalizePeriode = (rawPeriode) => {
+        let p = rawPeriode || "";
+        if (p.includes("~")) {
+          const [start] = p.split("~");
+          const parts = start.trim().split(/[-/]/);
+          let y, m;
+          if (parts[0]?.length === 4) { [y, m] = parts; }
+          else if (parts[2]?.length === 4) { [m, , y] = [parts[1], parts[0], parts[2]]; }
+          if (y && m) {
+            const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+            p = `${bulanIndo[parseInt(m) - 1] || "Bulan"} ${y}`;
+          }
+        }
+        return p;
+      };
+
       // 1. Hapus Absensi
-      const qAbs = query(collection(db, "absensi"), where("periode", "==", selectedPeriode));
-      const snapAbs = await getDocs(qAbs);
+      const snapAbs = await getDocs(collection(db, "absensi"));
       let deletedCount = 0;
       for (const d of snapAbs.docs) {
-        await deleteDoc(doc(db, "absensi", d.id));
-        deletedCount++;
+        const data = d.data();
+        if (normalizePeriode(data.periode) === selectedPeriode) {
+          await deleteDoc(doc(db, "absensi", d.id));
+          deletedCount++;
+        }
       }
 
       // Catat ke auditLog

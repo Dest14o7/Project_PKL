@@ -189,8 +189,37 @@ export default function Gaji() {
     }
   };
 
+  // Fungsi bantu untuk normalisasi periode
+  const normalizePeriode = (rawPeriode) => {
+    let p = rawPeriode || "";
+    if (p.includes("~")) {
+      const [start] = p.split("~");
+      const parts = start.trim().split(/[-/]/);
+      let y, m;
+      if (parts[0]?.length === 4) { [y, m] = parts; }
+      else if (parts[2]?.length === 4) { [m, , y] = [parts[1], parts[0], parts[2]]; }
+      
+      if (y && m) {
+        const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+        p = `${bulanIndo[parseInt(m) - 1] || "Bulan"} ${y}`;
+      }
+    }
+    return p;
+  };
+
   // Gabungkan absensi dengan data karyawan
-  const gajiList = absensiData.map(absensi => {
+  const uniqueAbsensiData = [];
+  const seenAbsensi = new Set();
+  for (const abs of absensiData) {
+    const normP = normalizePeriode(abs.periode);
+    const key = `${abs.userId?.toString().trim().replace(/^0+/, "")}_${normP}`;
+    if (!seenAbsensi.has(key)) {
+      seenAbsensi.add(key);
+      uniqueAbsensiData.push({ ...abs, displayPeriode: normP });
+    }
+  }
+
+  const gajiList = uniqueAbsensiData.map(absensi => {
     try {
       const karyawan = karyawanData.find(k =>
         k.userId?.toString()?.trim()?.replace(/^0+/, "") === absensi.userId?.toString()?.trim()?.replace(/^0+/, "")
@@ -199,20 +228,7 @@ export default function Gaji() {
       // Filter karyawan yang diarsip agar tidak muncul di menu gaji
       if (!karyawan || karyawan.status === "arsip") return null;
 
-      // Normalize Periode
-      let displayPeriode = absensi.periode || "";
-      if (displayPeriode.includes("~")) {
-        const [start] = displayPeriode.split("~");
-        const parts = start.trim().split(/[-/]/);
-        let y, m;
-        if (parts[0].length === 4) { [y, m] = parts; }
-        else if (parts[2]?.length === 4) { [m, , y] = [parts[1], parts[0], parts[2]]; }
-        
-        if (y && m) {
-          const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-          displayPeriode = `${bulanIndo[parseInt(m) - 1] || "Bulan"} ${y}`;
-        }
-      }
+      let displayPeriode = absensi.displayPeriode;
 
       const [bulan, tahun] = displayPeriode.split(" ");
       const bulanIndo = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { auth } from '../firebase'; 
 import { useEffect } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import logo from '../assets/logo.svg';
+import logo from '../assets/logo-snd.jpg';
 
 const Login = () => {
   const [email, setEmail] = useState('');

@@ -4,6 +4,7 @@ import {
   AlertTriangle, FileText, DollarSign, ChevronLeft, ChevronRight, Settings 
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import logo from "../../assets/logo-snd.jpg";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", id: "dashboard" },
@@ -27,7 +28,14 @@ export default function Sidebar({ activePage }) {
       {/* Logo */}
       <div className="flex items-center justify-between p-4" style={{ borderBottom: "1px solid #A67B5B" }}>
         {!collapsed && (
-          <span className="text-xl font-bold" style={{ color: "#FED8B1" }}>RekapIn</span>
+          <div className="flex items-center gap-2">
+            <img 
+              src={logo} 
+              alt="S&D Project" 
+              className="w-8 h-8 rounded-full object-cover"
+            />
+            <span className="text-xl font-bold" style={{ color: "#FED8B1" }}>RekapIn</span>
+          </div>
         )}
         <button 
           onClick={() => setCollapsed(!collapsed)} 
