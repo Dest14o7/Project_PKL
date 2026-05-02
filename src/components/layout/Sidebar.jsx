@@ -12,6 +12,7 @@ const menuItems = [
   { icon: AlertTriangle, label: "Anomali", id: "anomali" },
   { icon: FileText, label: "Izin", id: "izin" },
   { icon: DollarSign, label: "Gaji", id: "gaji" },
+  { icon: FileText, label: "Slip Gaji", id: "slipgaji" },
   { icon: Settings, label: "Pengaturan", id: "pengaturan" },
 ];
 

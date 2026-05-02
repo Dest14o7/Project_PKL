@@ -38,7 +38,21 @@ export default function Absensi() {
       if (!selectedPeriode) return;
       const q = query(collection(db, "absensi"), where("periode", "==", selectedPeriode));
       const snapshot = await getDocs(q);
-      setAbsensiData(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      const allAbsensi = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Ambil data karyawan untuk filter status aktif
+      const karyawanSnap = await getDocs(collection(db, "karyawan"));
+      const activeUserIds = new Set(
+        karyawanSnap.docs
+          .filter(d => d.data().status === "aktif")
+          .map(d => d.data().userId?.toString()?.trim()?.replace(/^0+/, ""))
+      );
+
+      const filtered = allAbsensi.filter(abs => 
+        activeUserIds.has(abs.userId?.toString()?.trim()?.replace(/^0+/, ""))
+      );
+
+      setAbsensiData(filtered);
     } catch (err) {
       console.error("Absensi Fetch Error:", err);
     }
@@ -357,6 +371,8 @@ export default function Absensi() {
                                 <th className="text-left py-1">Tanggal</th>
                                 <th className="text-center">Masuk Pagi</th>
                                 <th className="text-center">Keluar Pagi</th>
+                                <th className="text-center">Masuk Siang</th>
+                                <th className="text-center">Keluar Siang</th>
                                 <th className="text-center">Masuk Lembur</th>
                                 <th className="text-center">Keluar Lembur</th>
                               </tr>
@@ -367,6 +383,8 @@ export default function Absensi() {
                                   <td className="py-1" style={{ color: "#6F4E37" }}>{day.tanggal}</td>
                                   <td className="text-center" style={{ color: "#6F4E37" }}>{day.jamMasukPagi || "-"}</td>
                                   <td className="text-center" style={{ color: "#6F4E37" }}>{day.jamKeluarPagi || "-"}</td>
+                                  <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamMasukSiang || "-"}</td>
+                                  <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamKeluarSiang || "-"}</td>
                                   <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamMasukLembur || "-"}</td>
                                   <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamKeluarLembur || "-"}</td>
                                 </tr>
@@ -436,6 +454,8 @@ export default function Absensi() {
                                   <th className="text-left py-1">Tanggal</th>
                                   <th className="text-center">M. Pagi</th>
                                   <th className="text-center">K. Pagi</th>
+                                  <th className="text-center">M. Siang</th>
+                                  <th className="text-center">K. Siang</th>
                                   <th className="text-center">M. Lembur</th>
                                   <th className="text-center">K. Lembur</th>
                                 </tr>
@@ -446,6 +466,8 @@ export default function Absensi() {
                                     <td className="py-1" style={{ color: "#6F4E37" }}>{day.tanggal}</td>
                                     <td className="text-center" style={{ color: "#6F4E37" }}>{day.jamMasukPagi || "-"}</td>
                                     <td className="text-center" style={{ color: "#6F4E37" }}>{day.jamKeluarPagi || "-"}</td>
+                                    <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamMasukSiang || "-"}</td>
+                                    <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamKeluarSiang || "-"}</td>
                                     <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamMasukLembur || "-"}</td>
                                     <td className="text-center" style={{ color: "#A67B5B" }}>{day.jamKeluarLembur || "-"}</td>
                                   </tr>

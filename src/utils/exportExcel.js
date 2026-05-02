@@ -16,8 +16,8 @@ export const exportRekapAbsen = async (absensiData, selectedPeriode) => {
       sheet.addRow([
         day.tanggal,
         emp.nama,
-        day.jamMasukPagi || "",
-        day.jamKeluarPagi || "",
+        day.jamMasukPagi || day.jamMasukSiang || day.jamMasukLembur || "",
+        day.jamKeluarLembur || day.jamKeluarPagi || day.jamKeluarSiang || "",
       ]);
     }
   }

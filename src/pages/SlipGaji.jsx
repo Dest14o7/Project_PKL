@@ -44,12 +44,6 @@ export default function SlipGaji() {
       const absSnap = absensiSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setAbsensiData(absSnap);
 
-      // Fetch fallback from gaji collection
-      const qGaji = filterPeriode && filterPeriode !== "semua" ? query(collection(db, "gaji"), where("periode", "==", filterPeriode)) : collection(db, "gaji");
-      const gajiSnap = await getDocs(qGaji);
-      const gjData = gajiSnap.docs.map(d => ({ id: d.id, ...d.data(), fromCollection: true }));
-      setGajiCollectionData(gjData);
-
       const karyawanSnap = await getDocs(collection(db, "karyawan"));
       setKaryawanData(karyawanSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
@@ -57,47 +51,25 @@ export default function SlipGaji() {
       const komponenSnap = await getDocs(qKomponen);
       setKomponenData(komponenSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-      const qIzin = filterPeriode && filterPeriode !== "semua" ? query(collection(db, "izin"), where("periode", "==", filterPeriode)) : collection(db, "izin");
-      const izinSnap = await getDocs(qIzin);
+      const izinSnap = await getDocs(collection(db, "izin"));
       setIzinData(izinSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
       // Fetch ALL izin for balance tracking (across all periods)
       const allIzinSnap = await getDocs(collection(db, "izin"));
       const allIzin = allIzinSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      window._allIzinData = allIzin; // Temporary storage for use in gajiList
+      window._allIzinData = allIzin;
 
       // Combine periods
       let allPeriods = [];
       if (confData?.periodeList) {
         allPeriods = confData.periodeList.map(p => typeof p === 'string' ? p : p.name);
       }
-      const monthOrder = {
-        "januari": 1, "februari": 2, "maret": 3, "april": 4, "mei": 5, "juni": 6,
-        "juli": 7, "agustus": 8, "september": 9, "oktober": 10, "november": 11, "desember": 12
-      };
-
-      const sortedPeriods = allPeriods.sort((a, b) => {
-        const parse = (p) => {
-          if (!p) return 0;
-          if (p.includes("-") && p.length === 7) return new Date(p).getTime();
-          const parts = p.split(" ");
-          if (parts.length === 2) {
-            const m = monthOrder[parts[0].toLowerCase()] || 0;
-            const y = parseInt(parts[1]);
-            return new Date(y, m - 1).getTime();
-          }
-          return 0;
-        };
-        return parse(b) - parse(a);
-      });
-
+      
+      const sortedPeriods = allPeriods.sort((a, b) => b.localeCompare(a)); // Simple sort for periods
       setPeriodeList(sortedPeriods);
 
       if (!filterPeriode && sortedPeriods.length > 0) {
-        const defaultP = (confData?.periodeAktif && sortedPeriods.includes(confData.periodeAktif))
-            ? confData.periodeAktif
-            : sortedPeriods[0];
-        setFilterPeriode(defaultP);
+        setFilterPeriode(confData?.periodeAktif || sortedPeriods[0]);
       }
     } catch (err) {
       console.error("SlipGaji fetchData error:", err);
@@ -135,11 +107,12 @@ export default function SlipGaji() {
 
   const gajiList = (() => {
     const list = [];
-    const processedKeys = new Set();
-
-    // 1. Process Absensi Data
     absensiData.forEach(absensi => {
-      const k = karyawanData.find(k => k?.userId?.toString() === absensi?.userId?.toString());
+      const k = karyawanData.find(k => k?.userId?.toString()?.replace(/^0+/, "") === absensi?.userId?.toString()?.replace(/^0+/, ""));
+      
+      // Filter karyawan yang diarsip (sesuai req sebelumnya)
+      if (!k || k.status === "arsip") return;
+
       const tarifJam = Number(k?.tarifJam || 0);
       const gajiPokokBulan = Number(k?.gajiPokok || 0);
       const potonganIzinPerHari = Number(k?.potonganIzinPerHari || 0);
@@ -151,11 +124,23 @@ export default function SlipGaji() {
       const gajiPokok = gajiPokokBulan > 0 ? gajiPokokBulan : (totalJamKerja * tarifJam);
       const upahLembur = totalJamLembur * tarifJam;
 
+      // Hitung monthPrefix dari filterPeriode untuk filter izin
+      let monthPrefixForIzin = "";
+      if (filterPeriode && filterPeriode !== "semua") {
+        const [bln, thn] = filterPeriode.split(" ");
+        const bulanIndo = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+        const bIdx = bulanIndo.indexOf(bln) + 1;
+        if (bIdx > 0 && thn) monthPrefixForIzin = `${thn}-${bIdx.toString().padStart(2, "0")}`;
+      }
+
       const myIzin = (izinData || []).filter(i => {
-        if (i?.userId?.toString() !== absensi?.userId?.toString()) return false;
-        if (i.periode) return i.periode === absensi.periode;
-        const tgl = i.tglMulai || i.tanggal;
-        return tgl?.startsWith(absensi.periode.substring(0, 7));
+        if (i?.userId?.toString()?.replace(/^0+/, "") !== absensi?.userId?.toString()?.replace(/^0+/, "")) return false;
+        // Filter berdasarkan tglMulai atau tanggal sesuai periode aktif
+        if (monthPrefixForIzin) {
+          const refTgl = i.tglMulai || i.tanggal || "";
+          return refTgl.startsWith(monthPrefixForIzin);
+        }
+        return true;
       });
 
       const izinSummary = myIzin.reduce((acc, curr) => {
@@ -168,16 +153,11 @@ export default function SlipGaji() {
         return acc;
       }, { izin: 0, sakit: 0, cuti: 0, setengahHari: 0 });
 
-      const manualHariIzin = absensi.manualPotonganIzinHari;
-      const isManual = manualHariIzin !== undefined && manualHariIzin !== null;
-      
-      // Hitung total hari yang dipotong: Izin + Setengah Hari
-      const totalHariPotonganIzin = k?.tipe === 'freelance' ? 0 : (isManual ? manualHariIzin : (izinSummary.izin + izinSummary.setengahHari));
+      const totalHariPotonganIzin = k?.tipe === 'freelance' ? 0 : (izinSummary.izin + izinSummary.setengahHari);
       const nilaiPotonganIzin = totalHariPotonganIzin * potonganIzinPerHari;
 
       const myKomponen = (komponenData || []).filter(c => 
-        c?.userId?.toString() === absensi?.userId?.toString() && 
-        (c.isRecurring || c.periode === absensi.periode)
+        c?.userId?.toString()?.replace(/^0+/, "") === absensi?.userId?.toString()?.replace(/^0+/, "")
       );
 
       const bonusList = myKomponen.filter(c => c.kategori === "bonus");
@@ -192,14 +172,17 @@ export default function SlipGaji() {
 
       const takeHomePay = gajiPokok + upahLembur + totalBonus - totalSemuaPotongan;
 
+      // Hitung Sisa Cuti berdasarkan saldo di menu Karyawan dan tahun berjalan
+      const currentYear = absensi.periode?.split(" ")[1] || new Date().getFullYear().toString();
       const totalCutiTaken = (window._allIzinData || []).filter(i => 
-        i?.userId?.toString() === absensi?.userId?.toString() && 
-        i?.jenis?.toLowerCase() === "cuti"
-      ).reduce((sum, i) => sum + Number(i.totalHari || 0), 0);
+        i?.userId?.toString()?.trim()?.replace(/^0+/, "") === absensi?.userId?.toString()?.trim()?.replace(/^0+/, "") && 
+        i?.jenis?.toLowerCase() === "cuti" &&
+        (i?.tglMulai || i?.tanggal || "").startsWith(currentYear)
+      ).reduce((sum, i) => sum + Number(i.totalHari || 1), 0);
       
       const saldoCutiAktif = (k?.saldoCuti ?? 12) - totalCutiTaken;
 
-      const obj = {
+      list.push({
         userId: absensi.userId,
         nama: absensi.nama,
         dept: absensi.dept,
@@ -215,20 +198,7 @@ export default function SlipGaji() {
         totalHariPotonganIzin: isFreelance ? 0 : totalHariPotonganIzin,
         takeHomePay,
         saldoCuti: saldoCutiAktif,
-        izinSummary,
-        isManual,
-      };
-      list.push(obj);
-      processedKeys.add(`${obj.userId}_${obj.periode}`);
-    });
-
-    // 2. Process Gaji Collection (fallback)
-    gajiCollectionData.forEach(gj => {
-      const key = `${gj.userId}_${gj.periode}`;
-      if (!processedKeys.has(key)) {
-        list.push({ ...gj, fromCollection: true });
-        processedKeys.add(key);
-      }
+      });
     });
 
     return list;
@@ -244,53 +214,18 @@ export default function SlipGaji() {
   );
   filtered.sort((a, b) => Number(a.userId) - Number(b.userId));
 
-  const deleteAbsensiData = async (periode, userId = null) => {
-    try {
-      let q = query(collection(db, "absensi"), where("periode", "==", periode));
-      if (userId) {
-        q = query(collection(db, "absensi"), where("periode", "==", periode), where("userId", "==", userId));
-      }
-      const snap = await getDocs(q);
-      if (snap.empty) return;
-
-      const promises = snap.docs.map(d => deleteDoc(doc(db, "absensi", d.id)));
-      await Promise.all(promises);
-      console.log(`Data absensi ${userId ? `User ${userId}` : "Massal"} periode ${periode} berhasil dihapus otomatis.`);
-      fetchData();
-    } catch (err) {
-      console.error("Gagal menghapus data absensi otomatis:", err);
-    }
+  const handleCetakMassal = () => {
+    if (filtered.length === 0) return alert("Tidak ada data slip gaji pada periode ini.");
+    exportSlipGajiPDF(filtered, `Slip_Gaji_${filterPeriode}`, layout, templateConfig, "preview");
   };
 
   const handleDownloadMassal = () => {
     if (filtered.length === 0) return alert("Tidak ada data slip gaji pada periode ini.");
-    
-    const confirmMsg = `Apakah Anda yakin ingin mengunduh massal? \n\nPERHATIAN: Sistem akan MENGHAPUS data absensi harian untuk periode ${filterPeriode} setelah unduhan dimulai. Data gaji tetap tersimpan di database.`;
-    if (!confirm(confirmMsg)) return;
-
-    exportSlipGajiPDF(filtered, filterPeriode || "Slip_Gaji", layout, templateConfig);
-    
-    // Trigger auto-delete
-    setTimeout(() => {
-      deleteAbsensiData(filterPeriode);
-    }, 2000);
-  };
-
-  const handleCetakMassal = () => {
-    if (filtered.length === 0) return alert("Tidak ada data slip gaji pada periode ini.");
-    exportSlipGajiPDF(filtered, filterPeriode || "Slip_Gaji", layout, templateConfig, "preview");
+    exportSlipGajiPDF(filtered, `Slip_Gaji_${filterPeriode}`, layout, templateConfig, "download");
   };
 
   const handleDownloadSingle = (g) => {
-    const confirmMsg = `Unduh slip gaji untuk ${g.nama}? \n\nData absensi harian untuk karyawan ini pada periode ${g.periode} akan dihapus otomatis.`;
-    if (!confirm(confirmMsg)) return;
-
-    exportSlipGajiPDF([g], filterPeriode || g.periode, 1, templateConfig);
-    
-    // Trigger auto-delete
-    setTimeout(() => {
-      deleteAbsensiData(g.periode, g.userId);
-    }, 2000);
+    exportSlipGajiPDF([g], `SlipGaji_${g.nama}_${g.periode.replace(/\s+/g, '')}`, 1, templateConfig);
   };
 
   return (
@@ -317,7 +252,7 @@ export default function SlipGaji() {
             className="px-5 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm transition-all hover:scale-105"
             style={{ backgroundColor: "#6F4E37", color: "#FED8B1" }}
           >
-            <Download size={18} /> Unduh Massal PDF
+            <Download size={18} /> Unduh Masal PDF
           </button>
         </div>
       </div>

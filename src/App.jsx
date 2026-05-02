@@ -8,6 +8,7 @@ import Absensi from "./pages/Absensi";
 import Anomali from "./pages/Anomali";
 import Izin from "./pages/Izin";
 import Gaji from "./pages/Gaji";
+import SlipGaji from "./pages/SlipGaji";
 import Pengaturan from "./pages/Pengaturan";
 import Login from "./pages/Login";
 
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/anomali" element={<Layout activePage="anomali"><Anomali /></Layout>} />
         <Route path="/izin" element={<Layout activePage="izin"><Izin /></Layout>} />
         <Route path="/gaji" element={<Layout activePage="gaji"><Gaji /></Layout>} />
+        <Route path="/slipgaji" element={<Layout activePage="slipgaji"><SlipGaji /></Layout>} />
         <Route path="/pengaturan" element={<Layout activePage="pengaturan"><Pengaturan /></Layout>} />
 
         {/* Redirect */}

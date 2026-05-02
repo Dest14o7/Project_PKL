@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
-import { FileText, Plus, Trash2, Search, Upload, AlertCircle, CheckCircle } from "lucide-react";
+import { FileText, Plus, Trash2, Search, Upload, AlertCircle, CheckCircle, Pencil } from "lucide-react";
 import { db } from "../firebase";
-import { collection, addDoc, getDocs, deleteDoc, doc, getDoc, writeBatch } from "firebase/firestore";
+import { collection, addDoc, getDocs, deleteDoc, doc, getDoc, writeBatch, updateDoc } from "firebase/firestore";
 import { parseIzinExcel } from "../utils/excelParser";
-import { downloadTemplateIzin } from "../utils/exportExcel";
 
 
 const jenisIzin = ["Izin", "Sakit", "Cuti", "Setengah Hari (Pagi)", "Setengah Hari (Siang)", "Izin Terlambat", "Izin 2 Jam"];
+const statsJenis = ["Izin", "Sakit", "Cuti"];
 
 export default function Izin() {
   const [izinData, setIzinData] = useState([]);
@@ -21,8 +21,12 @@ export default function Izin() {
     userId: "",
     nama: "",
     dept: "",
-    tanggal: "",
+    tglMulai: "",
+    tglSelesai: "",
+    jamMulai: "-",
+    jamSelesai: "-",
     jenis: "Izin",
+    totalHari: 1,
     keterangan: "",
   });
   const [searchKaryawan, setSearchKaryawan] = useState("");
@@ -32,6 +36,7 @@ export default function Izin() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importResults, setImportResults] = useState([]);
   const [isImporting, setIsImporting] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   const fetchData = async () => {
     try {
@@ -63,7 +68,7 @@ export default function Izin() {
       setIzinData(izin.sort((a, b) => {
         const dateA = new Date(a.tanggal || 0);
         const dateB = new Date(b.tanggal || 0);
-        return dateB - dateA;
+        return dateA - dateB; // Sort ascending (1 ke 31)
       }));
 
       // Fetch karyawan untuk dropdown
@@ -82,6 +87,44 @@ export default function Izin() {
 
   useEffect(() => { fetchData(); }, [selectedPeriode]);
 
+  // Auto-fill Jam & Total Hari
+  useEffect(() => {
+    let jamM = "-";
+    let jamS = "-";
+    let total = 1;
+
+    // Logika Jam berdasarkan Jenis
+    if (form.jenis === "Setengah Hari (Pagi)") {
+      jamM = "08:00";
+      jamS = "12:00";
+      total = 0.5;
+    } else if (form.jenis === "Setengah Hari (Siang)") {
+      jamM = "13:00";
+      jamS = "16:00";
+      total = 0.5;
+    }
+
+    // Logika Total Hari berdasarkan Rentang Tanggal (jika bukan setengah hari)
+    if (!form.jenis.includes("Setengah Hari") && form.tglMulai) {
+      if (form.tglSelesai) {
+        const start = new Date(form.tglMulai);
+        const end = new Date(form.tglSelesai);
+        const diffTime = end - start;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+        total = diffDays > 0 ? diffDays : 1;
+      } else {
+        total = 1;
+      }
+    }
+
+    setForm(prev => ({ 
+      ...prev, 
+      jamMulai: jamM, 
+      jamSelesai: jamS, 
+      totalHari: total 
+    }));
+  }, [form.jenis, form.tglMulai, form.tglSelesai]);
+
   const handleKaryawanChange = (userId) => {
     const k = karyawanList.find(k => k.userId.toString() === userId.toString());
     if (k) {
@@ -89,26 +132,86 @@ export default function Izin() {
     }
   };
 
+  const resetForm = () => {
+    setForm({ 
+      userId: "", nama: "", dept: "", tglMulai: "", tglSelesai: "", 
+      jamMulai: "-", jamSelesai: "-", jenis: "Izin", totalHari: 1, keterangan: "" 
+    });
+    setSearchKaryawan("");
+    setShowForm(false);
+    setEditingId(null);
+  };
+
   const handleSubmit = async () => {
-  if (!form.userId || !form.tanggal || !form.jenis) {
-    return alert("Karyawan, tanggal, dan jenis izin wajib diisi!");
-  }
-  const normalizedId = form.userId?.toString().replace(/^0+/, "") || "";
-  await addDoc(collection(db, "izin"), {
-    ...form,
-    userId: normalizedId,
-    createdAt: new Date().toISOString(),
+    if (!form.userId || !form.tglMulai || !form.jenis) {
+      return alert("Karyawan, tanggal mulai, dan jenis izin wajib diisi!");
+    }
+    const normalizedId = form.userId?.toString().replace(/^0+/, "") || "";
+    
+    if (editingId) {
+      await updateDoc(doc(db, "izin", editingId), {
+        ...form,
+        tanggal: form.tglMulai,
+        userId: normalizedId,
+      });
+    } else {
+      await addDoc(collection(db, "izin"), {
+        ...form,
+        tanggal: form.tglMulai,
+        userId: normalizedId,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    resetForm();
+    fetchData();
+  };
+
+  const handleEdit = (izin) => {
+    setEditingId(izin.id);
+    setForm({
+      userId: izin.userId || "",
+      nama: izin.nama || "",
+      dept: izin.dept || "",
+      tglMulai: izin.tglMulai || izin.tanggal || "",
+      tglSelesai: izin.tglSelesai || "",
+      jamMulai: izin.jamMulai || "-",
+      jamSelesai: izin.jamSelesai || "-",
+      jenis: izin.jenis || "Izin",
+      totalHari: izin.totalHari || 1,
+      keterangan: izin.keterangan || "",
+    });
+    setSearchKaryawan(`${izin.userId} - ${izin.nama}`);
+    setShowForm(true);
+  };
+
+  const filtered = izinData.filter(i => {
+    const matchesSearch = i.nama?.toLowerCase().includes(search.toLowerCase()) ||
+                         i.jenis?.toLowerCase().includes(search.toLowerCase());
+    const matchesPrefix = monthPrefix ? i.tanggal?.startsWith(monthPrefix) : true;
+    return matchesSearch && matchesPrefix;
   });
-  setForm({ userId: "", nama: "", dept: "", tanggal: "", jenis: "Izin", keterangan: "" });
-  setSearchKaryawan("");
-  setShowForm(false);
-  fetchData();
-};
 
   const handleHapus = async (id) => {
     if (!confirm("Hapus data izin ini?")) return;
     await deleteDoc(doc(db, "izin", id));
     fetchData();
+  };
+
+  const handleHapusSemua = async () => {
+    if (filtered.length === 0) return;
+    if (!confirm(`Apakah Anda yakin ingin menghapus ${filtered.length} data izin yang sedang tampil di tabel ini?\n\nPeringatan: Data yang dihapus dari sistem tidak dapat dikembalikan!`)) return;
+
+    try {
+      setLoading(true);
+      const deletePromises = filtered.map(i => deleteDoc(doc(db, "izin", i.id)));
+      await Promise.all(deletePromises);
+      
+      alert(`Berhasil menghapus ${filtered.length} data izin.`);
+      fetchData();
+    } catch (error) {
+      alert("Terjadi kesalahan saat menghapus data: " + error.message);
+      setLoading(false);
+    }
   };
 
   const handleImportFile = async (e) => {
@@ -182,12 +285,7 @@ export default function Izin() {
     }
   };
 
-  const filtered = izinData.filter(i => {
-    const matchesSearch = i.nama?.toLowerCase().includes(search.toLowerCase()) ||
-                         i.jenis?.toLowerCase().includes(search.toLowerCase());
-    const matchesPrefix = monthPrefix ? i.tanggal?.startsWith(monthPrefix) : true;
-    return matchesSearch && matchesPrefix;
-  });
+
 
   const jenisColor = {
     "Izin": { bg: "#E8F4FD", color: "#1A5276" },
@@ -221,18 +319,20 @@ export default function Izin() {
               <option key={p} value={p}>{p}</option>
             ))}
           </select>
-          <button
-            onClick={downloadTemplateIzin}
-            className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border border-[#6F4E37]"
-            style={{ color: "#6F4E37" }}
-          >
-            <Upload size={16} className="rotate-180" /> Template
-          </button>
           <label className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 cursor-pointer border border-[#6F4E37]"
             style={{ color: "#6F4E37" }}>
             <Upload size={16} /> Import File
             <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFile} />
           </label>
+          {filtered.length > 0 && (
+            <button
+              onClick={handleHapusSemua}
+              className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition-colors hover:bg-red-800"
+              style={{ backgroundColor: "#842029", color: "#F8D7DA", border: "1px solid #842029" }}
+            >
+              <Trash2 size={16} /> Hapus Tampil
+            </button>
+          )}
           <button
             onClick={() => setShowForm(true)}
             className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm"
@@ -244,13 +344,14 @@ export default function Izin() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {jenisIzin.map(j => {
-          const count = izinData.filter(i => i.jenis === j).length;
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {statsJenis.map(j => {
+          const count = filtered.filter(i => i.jenis?.toLowerCase() === j.toLowerCase()).length;
           return (
-            <div key={j} className="rounded-xl p-4" style={{ backgroundColor: jenisColor[j].bg }}>
-              <p className="text-xs font-medium" style={{ color: jenisColor[j].color }}>{j}</p>
-              <p className="text-2xl font-bold mt-1" style={{ color: jenisColor[j].color }}>{count}</p>
+            <div key={j} className="rounded-xl p-5 shadow-sm" style={{ backgroundColor: jenisColor[j].bg }}>
+              <p className="text-xs font-bold uppercase tracking-wider" style={{ color: jenisColor[j].color }}>Total {j}</p>
+              <p className="text-3xl font-black mt-2" style={{ color: jenisColor[j].color }}>{count}</p>
+              <p className="text-[10px] mt-1 opacity-70" style={{ color: jenisColor[j].color }}>Periode: {selectedPeriode}</p>
             </div>
           );
         })}
@@ -274,82 +375,61 @@ export default function Izin() {
         <div className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ backgroundColor: "rgba(0,0,0,0.4)" }}>
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-            <h3 className="text-lg font-bold mb-4" style={{ color: "#6F4E37" }}>Tambah Izin</h3>
-            <div className="space-y-3">
+            <h3 className="text-lg font-bold mb-4" style={{ color: "#6F4E37" }}>{editingId ? "Edit Izin" : "Tambah Izin"}</h3>
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 pr-2">
 
               {/* Pilih Karyawan */}
-<div className="relative">
-  <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Karyawan</label>
-  <input
-    type="text"
-    placeholder="Cari nama karyawan..."
-    value={searchKaryawan}
-    onChange={e => {
-      setSearchKaryawan(e.target.value);
-      setShowDropdown(true);
-    }}
-    onFocus={() => setShowDropdown(true)}
-    className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none"
-    style={{ border: "1px solid #ECB176", color: "#6F4E37" }}
-  />
-
-  {/* Dropdown hasil search */}
-  {showDropdown && (
-    <div className="absolute z-10 w-full mt-1 bg-white rounded-lg shadow-lg max-h-48 overflow-y-auto"
-      style={{ border: "1px solid #ECB176" }}>
-      {karyawanList
-        .filter(k =>
-          k.nama?.toLowerCase().includes(searchKaryawan.toLowerCase()) ||
-          k.userId?.toString().includes(searchKaryawan)
-        )
-        .map(k => (
-          <button
-            key={k.id}
-            type="button"
-            onClick={() => {
-              handleKaryawanChange(k.userId);
-              setSearchKaryawan(`${k.userId} - ${k.nama}`);
-              setShowDropdown(false);
-            }}
-            className="w-full px-3 py-2 text-left text-sm hover:bg-amber-50 transition-colors"
-            style={{ color: "#6F4E37" }}
-          >
-            <span className="font-medium">{k.userId} - {k.nama}</span>
-            <span className="text-xs ml-2" style={{ color: "#A67B5B" }}>({k.dept})</span>
-          </button>
-        ))}
-      {karyawanList.filter(k =>
-        k.nama?.toLowerCase().includes(searchKaryawan.toLowerCase()) ||
-        k.userId?.toString().includes(searchKaryawan)
-      ).length === 0 && (
-        <p className="px-3 py-2 text-sm" style={{ color: "#A67B5B" }}>
-          Karyawan tidak ditemukan
-        </p>
-      )}
-    </div>
-  )}
-</div>
-
-              {/* Tanggal */}
-              <div>
-                <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Tanggal</label>
+              <div className="relative">
+                <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Karyawan</label>
                 <input
-                  type="date"
-                  value={form.tanggal}
-                  onChange={e => setForm({ ...form, tanggal: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ border: "1px solid #ECB176", color: "#6F4E37" }}
+                  type="text"
+                  placeholder="Cari nama karyawan..."
+                  value={searchKaryawan}
+                  onChange={e => {
+                    setSearchKaryawan(e.target.value);
+                    setShowDropdown(true);
+                  }}
+                  onFocus={() => setShowDropdown(true)}
+                  className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                  style={{ color: "#6F4E37" }}
                 />
+
+                {/* Dropdown hasil search */}
+                {showDropdown && (
+                  <div className="absolute z-10 w-full mt-1 bg-white rounded-lg shadow-lg max-h-48 overflow-y-auto border border-[#ECB176]">
+                    {karyawanList
+                      .filter(k =>
+                        k.nama?.toLowerCase().includes(searchKaryawan.toLowerCase()) ||
+                        k.userId?.toString().includes(searchKaryawan)
+                      )
+                      .map(k => (
+                        <button
+                          key={k.id}
+                          type="button"
+                          onClick={() => {
+                            handleKaryawanChange(k.userId);
+                            setSearchKaryawan(`${k.userId} - ${k.nama}`);
+                            setShowDropdown(false);
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-amber-50 transition-colors border-b last:border-0 border-amber-50"
+                          style={{ color: "#6F4E37" }}
+                        >
+                          <span className="font-bold">{k.userId} - {k.nama}</span>
+                          <span className="text-[10px] ml-2 opacity-70">({k.dept})</span>
+                        </button>
+                      ))}
+                  </div>
+                )}
               </div>
 
               {/* Jenis Izin */}
               <div>
-                <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Jenis Izin</label>
+                <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Jenis Izin</label>
                 <select
                   value={form.jenis}
                   onChange={e => setForm({ ...form, jenis: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ border: "1px solid #ECB176", color: "#6F4E37" }}
+                  className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                  style={{ color: "#6F4E37" }}
                 >
                   {jenisIzin.map(j => (
                     <option key={j} value={j}>{j}</option>
@@ -357,23 +437,83 @@ export default function Izin() {
                 </select>
               </div>
 
+              {/* Tanggal Mulai & Selesai */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Tgl Mulai</label>
+                  <input
+                    type="date"
+                    value={form.tglMulai}
+                    onChange={e => setForm({ ...form, tglMulai: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                    style={{ color: "#6F4E37" }}
+                  />
+                </div>
+                {!form.jenis.includes("Setengah Hari") && (
+                  <div>
+                    <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Tgl Selesai (Opsional)</label>
+                    <input
+                      type="date"
+                      value={form.tglSelesai}
+                      onChange={e => setForm({ ...form, tglSelesai: e.target.value })}
+                      className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none border border-[#ECB176] focus:border-[#6F4E37]"
+                      style={{ color: "#6F4E37" }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Jam & Total Hari */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Jam Mulai</label>
+                  <input
+                    type="text"
+                    value={form.jamMulai}
+                    readOnly
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none bg-gray-50 border border-gray-200"
+                    style={{ color: "#6F4E37" }}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Jam Selesai</label>
+                  <input
+                    type="text"
+                    value={form.jamSelesai}
+                    readOnly
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none bg-gray-50 border border-gray-200"
+                    style={{ color: "#6F4E37" }}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Total Hari</label>
+                  <input
+                    type="text"
+                    value={form.totalHari}
+                    readOnly
+                    className="w-full mt-1 px-3 py-2 rounded-lg text-sm font-bold outline-none bg-amber-50 border border-amber-200"
+                    style={{ color: "#6F4E37" }}
+                  />
+                </div>
+              </div>
+
               {/* Keterangan */}
               <div>
-                <label className="text-xs font-medium" style={{ color: "#6F4E37" }}>Keterangan (opsional)</label>
+                <label className="text-xs font-bold uppercase" style={{ color: "#6F4E37" }}>Keterangan</label>
                 <textarea
                   value={form.keterangan}
                   onChange={e => setForm({ ...form, keterangan: e.target.value })}
-                  placeholder="Contoh: Sakit demam, ada surat dokter"
-                  rows={3}
-                  className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none resize-none"
-                  style={{ border: "1px solid #ECB176", color: "#6F4E37" }}
+                  placeholder="Isi keterangan jika diperlukan..."
+                  rows={2}
+                  className="w-full mt-1 px-3 py-2 rounded-lg text-sm outline-none resize-none border border-[#ECB176] focus:border-[#6F4E37]"
+                  style={{ color: "#6F4E37" }}
                 />
               </div>
             </div>
 
             <div className="flex gap-2 mt-5">
               <button
-                onClick={() => setShowForm(false)}
+                onClick={resetForm}
                 className="flex-1 py-2 rounded-lg text-sm font-medium"
                 style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}
               >
@@ -488,37 +628,60 @@ export default function Izin() {
           <table className="w-full text-sm">
             <thead>
               <tr style={{ backgroundColor: "#6F4E37", color: "#FED8B1" }}>
-                <th className="px-4 py-3 text-left">Tanggal</th>
+                <th className="px-4 py-3 text-left w-20">User ID</th>
                 <th className="px-4 py-3 text-left">Nama</th>
-                <th className="px-4 py-3 text-left">Dept</th>
                 <th className="px-4 py-3 text-left">Jenis Izin</th>
+                <th className="px-4 py-3 text-left">Tanggal</th>
+                <th className="px-4 py-3 text-center w-24">Total Hari</th>
                 <th className="px-4 py-3 text-left">Keterangan</th>
-                <th className="px-4 py-3 text-center">Aksi</th>
+                <th className="px-4 py-3 text-center w-24">Aksi</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((izin, i) => (
                 <tr key={izin.id} style={{ backgroundColor: i % 2 === 0 ? "#fffaf5" : "white" }}>
-                  <td className="px-4 py-3 text-xs" style={{ color: "#6F4E37" }}>{izin.tanggal}</td>
+                  <td className="px-4 py-3 font-medium" style={{ color: "#6F4E37" }}>{izin.userId}</td>
                   <td className="px-4 py-3 font-medium" style={{ color: "#6F4E37" }}>{izin.nama}</td>
-                  <td className="px-4 py-3" style={{ color: "#A67B5B" }}>{izin.dept}</td>
                   <td className="px-4 py-3">
                     <span className="px-2 py-1 rounded-full text-xs font-medium"
-                      style={jenisColor[izin.jenis]}>
+                      style={jenisColor[izin.jenis] || { bg: "#eee", color: "#333" }}>
                       {izin.jenis}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-xs" style={{ color: "#6F4E37" }}>
+                    <span className="font-medium">{izin.tglMulai || izin.tanggal}</span>
+                    {izin.tglSelesai && izin.tglSelesai !== izin.tglMulai && (
+                      <span style={{ color: "#A67B5B" }}> s/d {izin.tglSelesai}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <span className="px-2 py-0.5 rounded-full text-xs font-bold"
+                      style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}>
+                      {izin.totalHari || 1} hari
                     </span>
                   </td>
                   <td className="px-4 py-3 text-xs" style={{ color: "#A67B5B" }}>
                     {izin.keterangan || "-"}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <button
-                      onClick={() => handleHapus(izin.id)}
-                      className="p-1.5 rounded-lg"
-                      style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => handleEdit(izin)}
+                        className="p-1.5 rounded-lg transition-transform hover:scale-105"
+                        style={{ backgroundColor: "#E0F2F1", color: "#00695C" }}
+                        title="Edit"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        onClick={() => handleHapus(izin.id)}
+                        className="p-1.5 rounded-lg transition-transform hover:scale-105"
+                        style={{ backgroundColor: "#F8D7DA", color: "#842029" }}
+                        title="Hapus"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

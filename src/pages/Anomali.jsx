@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp, CheckCircle, Clock, UserX, LogOut, Pencil } from "lucide-react";
 import { db } from "../firebase";
-import { collection, getDocs, updateDoc, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs, updateDoc, doc, getDoc, writeBatch } from "firebase/firestore";
 
 const jenisColor = {
   "Tidak Hadir": { bg: "#F8D7DA", color: "#842029" },
@@ -51,24 +51,86 @@ export default function Anomali() {
         setMonthPrefix(prefix);
       }
 
-      // 2. Fetch Anomali & Karyawan
-      const snapshot = await getDocs(collection(db, "anomali"));
+      // 2. Fetch Anomali, Karyawan & Izin secara paralel
+      const [snapshot, karyawanSnap, izinSnap] = await Promise.all([
+        getDocs(collection(db, "anomali")),
+        getDocs(collection(db, "karyawan")),
+        getDocs(collection(db, "izin")),
+      ]);
+
       const rawAnomali = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-
-      const karyawanSnap = await getDocs(collection(db, "karyawan"));
       const karyawanData = karyawanSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const izinList = izinSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      const data = rawAnomali
+      // 3a. Migrasi data lama: status non-standar ("cuti", "izin", dll) → "dikonfirmasi"
+      const STATUS_VALID = ["belum", "dikonfirmasi"];
+      const migrasiMap = {};
+      const toMigrasi = [];
+
+      for (const a of rawAnomali) {
+        if (STATUS_VALID.includes(a.status)) continue;
+        // status lama (mis. "cuti") SELALU jadi keterangan (alasan konfirmasi)
+        const keteranganBaru = a.status || a.keterangan;
+        migrasiMap[a.id] = { status: "dikonfirmasi", keterangan: keteranganBaru };
+        toMigrasi.push({ id: a.id, keterangan: keteranganBaru });
+      }
+
+      // 3b. Auto-validasi: cek anomali "belum" yang cocok dengan data izin
+      const autoConfirmMap = { ...migrasiMap };
+      const toUpdate = [...toMigrasi];
+
+      for (const a of rawAnomali) {
+        if (a.status !== "belum") continue;
+        const normId = a.userId?.toString()?.replace(/^0+/, "");
+
+        const matchingIzin = izinList.find(iz => {
+          const sameUser = iz.userId?.toString()?.replace(/^0+/, "") === normId;
+          if (!sameUser) return false;
+          const mulai = iz.tglMulai || iz.tanggal;
+          const selesai = iz.tglSelesai || mulai;
+          return mulai && selesai && a.tanggal >= mulai && a.tanggal <= selesai;
+        });
+
+        if (matchingIzin) {
+          const keterangan = matchingIzin.jenis || "Izin";
+          autoConfirmMap[a.id] = { status: "dikonfirmasi", keterangan };
+          toUpdate.push({ id: a.id, keterangan });
+        }
+      }
+
+      // Batch update Firestore (migrasi + auto-validasi)
+      if (toUpdate.length > 0) {
+        const batch = writeBatch(db);
+        toUpdate.forEach(({ id, keterangan }) => {
+          batch.update(doc(db, "anomali", id), { status: "dikonfirmasi", keterangan });
+        });
+        await batch.commit();
+      }
+
+      // 4. Terapkan hasil auto-validasi ke data in-memory
+      const updatedRaw = rawAnomali.map(a =>
+        autoConfirmMap[a.id] ? { ...a, ...autoConfirmMap[a.id] } : a
+      );
+
+      const data = updatedRaw
         .map(a => {
           const k = karyawanData.find(emp => 
             emp.userId?.toString()?.trim()?.replace(/^0+/, "") === a.userId?.toString()?.trim()?.replace(/^0+/, "")
           );
-          return { ...a, tipe: k?.tipe || "tetap" };
+          return { ...a, k };
         })
         .filter(a => 
+          a.k && a.k.status !== "arsip" &&
           (a.jenis === "Tidak Hadir" || a.jenis === "Scan Tidak Lengkap") &&
           (prefix ? a.tanggal?.startsWith(prefix) : true)
-        );
+        )
+        .map(a => {
+          const tipe = a.k.tipe || "tetap";
+          const nama = a.k.nama || a.nama;
+          const dept = a.k.dept || a.dept;
+          delete a.k;
+          return { ...a, tipe, nama, dept };
+        });
 
       setAnomaliData(data);
     } catch (err) {
@@ -80,8 +142,62 @@ export default function Anomali() {
 
   useEffect(() => { fetchAnomali(); }, [selectedPeriode]);
 
+  // Helper: konfirmasi SEMUA anomali dalam rentang izin multi-hari
+  const autoKonfirmasiByIzin = async (userId, tanggal, keterangan) => {
+    try {
+      const normalizedUserId = userId?.toString()?.replace(/^0+/, "");
+
+      // Ambil semua izin milik user ini
+      const izinSnap = await getDocs(collection(db, "izin"));
+      const izinList = izinSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Cari izin yang mencakup tanggal anomali ini
+      const matchingIzin = izinList.find(iz => {
+        const sameUser = iz.userId?.toString()?.replace(/^0+/, "") === normalizedUserId;
+        if (!sameUser) return false;
+        const mulai = iz.tglMulai || iz.tanggal;
+        const selesai = iz.tglSelesai || mulai;
+        return tanggal >= mulai && tanggal <= selesai;
+      });
+
+      // Hanya lanjut jika izin lebih dari 1 hari
+      if (!matchingIzin || !matchingIzin.tglSelesai || matchingIzin.tglSelesai === matchingIzin.tglMulai) return;
+
+      const tglMulai = matchingIzin.tglMulai;
+      const tglSelesai = matchingIzin.tglSelesai;
+
+      // Ambil semua anomali user ini dalam rentang tanggal tersebut yang belum dikonfirmasi
+      const snapshot = await getDocs(collection(db, "anomali"));
+      const anomalisInRange = snapshot.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(a =>
+          a.userId?.toString()?.replace(/^0+/, "") === normalizedUserId &&
+          a.tanggal >= tglMulai &&
+          a.tanggal <= tglSelesai &&
+          a.status === "belum"
+        );
+
+      if (anomalisInRange.length === 0) return;
+
+      const batch = writeBatch(db);
+      anomalisInRange.forEach(a => {
+        batch.update(doc(db, "anomali", a.id), {
+          status: "dikonfirmasi",
+          keterangan: keterangan || matchingIzin.jenis || "",
+        });
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error("autoKonfirmasiByIzin error:", err);
+    }
+  };
+
+
   const handleKonfirmasi = async (id) => {
+    const target = anomaliData.find(a => a.id === id);
     await updateDoc(doc(db, "anomali", id), { status: "dikonfirmasi" });
+    // Auto-konfirmasi anomali lain dalam rentang izin multi-hari
+    if (target) await autoKonfirmasiByIzin(target.userId, target.tanggal, target.keterangan);
     fetchAnomali();
   };
 
@@ -165,6 +281,10 @@ export default function Anomali() {
   }
 
   await updateDoc(doc(db, "anomali", editData.id), updateData);
+
+  // Auto-konfirmasi anomali lain dalam rentang izin multi-hari
+  await autoKonfirmasiByIzin(editData.userId, editData.tanggal, editForm.keterangan);
+
   setEditData(null);
   fetchAnomali();
 };
@@ -218,16 +338,6 @@ export default function Anomali() {
           </p>
         </div>
         <div className="flex gap-3">
-          <select
-            value={filterJenis}
-            onChange={e => setFilterJenis(e.target.value)}
-            className="px-3 py-1.5 rounded-lg text-sm outline-none"
-            style={{ border: "1px solid #ECB176", color: "#6F4E37", backgroundColor: "white" }}
-          >
-            <option value="semua">Semua Jenis</option>
-            <option value="Tidak Hadir">Tidak Hadir</option>
-            <option value="Scan Tidak Lengkap">Scan Tidak Lengkap</option>
-          </select>
 
           <input
             type="text"
@@ -284,6 +394,19 @@ export default function Anomali() {
             <p className="text-2xl font-bold mt-1" style={{ color: s.color }}>{s.value}</p>
           </div>
         ))}
+      </div>
+
+      {/* Filter Jenis - Di bawah Stats */}
+      <div className="flex justify-start">        <select
+          value={filterJenis}
+          onChange={e => setFilterJenis(e.target.value)}
+          className="px-3 py-1.5 rounded-lg text-sm outline-none border transition-all"
+          style={{ border: "1px solid #ECB176", color: "#6F4E37", backgroundColor: "white" }}
+        >
+          <option value="semua">Semua Jenis</option>
+          <option value="Tidak Hadir">Tidak Hadir</option>
+          <option value="Scan Tidak Lengkap">Scan Tidak Lengkap</option>
+        </select>
       </div>
 
 
@@ -480,7 +603,7 @@ export default function Anomali() {
                                     backgroundColor: a.status === "belum" ? "#fff3cd" : "#d4edda",
                                     color: a.status === "belum" ? "#856404" : "#155724"
                                   }}>
-                                  {a.status === "belum" ? "Belum" : a.status}
+                                  {a.status === "belum" ? "Belum" : "dikonfirmasi"}
                                 </span>
                               </td>
                               <td className="px-5 py-2.5 text-center">

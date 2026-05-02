@@ -8,6 +8,7 @@ import {
 export default function Karyawan() {
   const [karyawan, setKaryawan] = useState([]);
   const [arsip, setArsip] = useState([]);
+  const [izinData, setIzinData] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [showArsip, setShowArsip] = useState(false);
   const [editData, setEditData] = useState(null);
@@ -19,11 +20,41 @@ export default function Karyawan() {
   });
 
   const fetchKaryawan = async () => {
-    const snapshot = await getDocs(collection(db, "karyawan"));
-    const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    const sorted = data.sort((a, b) => Number(a.userId) - Number(b.userId));
-    setKaryawan(sorted.filter(k => k.status === "aktif"));
-    setArsip(sorted.filter(k => k.status === "arsip"));
+    try {
+      const snapshot = await getDocs(collection(db, "karyawan"));
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Auto-delete arsip > 7 hari
+      const now = new Date();
+      let hasDeleted = false;
+      
+      for (const k of data) {
+        if (k.status === "arsip" && k.arsipAt) {
+          const arsipDate = new Date(k.arsipAt);
+          const diffDays = (now - arsipDate) / (1000 * 60 * 60 * 24);
+          if (diffDays > 7) {
+            await deleteDoc(doc(db, "karyawan", k.id));
+            hasDeleted = true;
+          }
+        }
+      }
+
+      // Jika ada yang dihapus, ambil ulang data terbaru
+      let finalData = data;
+      if (hasDeleted) {
+        const freshSnapshot = await getDocs(collection(db, "karyawan"));
+        finalData = freshSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      }
+
+      const sorted = finalData.sort((a, b) => Number(a.userId) - Number(b.userId));
+      setKaryawan(sorted.filter(k => k.status === "aktif"));
+      setArsip(sorted.filter(k => k.status === "arsip"));
+
+      const izinSnap = await getDocs(collection(db, "izin"));
+      setIzinData(izinSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error("Fetch Karyawan Error:", err);
+    }
   };
 
   useEffect(() => { fetchKaryawan(); }, []);
@@ -81,7 +112,7 @@ export default function Karyawan() {
     fetchKaryawan();
   };
 
-  const filtered = karyawan.filter(k =>
+  const filtered = (showArsip ? arsip : karyawan).filter(k =>
     k.tipe === activeTab &&
     (k.nama?.toLowerCase().includes(search.toLowerCase()) ||
     k.userId?.toString().includes(search) ||
@@ -91,6 +122,8 @@ export default function Karyawan() {
   const arsipFiltered = arsip.filter(k => k.tipe === activeTab);
   const tetapCount = karyawan.filter(k => k.tipe === "tetap").length;
   const freelanceCount = karyawan.filter(k => k.tipe === "freelance").length;
+
+  const currentYear = new Date().getFullYear().toString();
 
   return (
     <div className="space-y-6">
@@ -335,16 +368,33 @@ export default function Karyawan() {
                     <p className="font-bold" style={{ color: "#6F4E37" }}>Rp {Number(k.tarifJam || 0).toLocaleString("id-ID")}/jam</p>
                   </div>
                   <div>
-                    <p style={{ color: "#A67B5B" }}>Saldo Cuti</p>
-                    <p className="font-bold" style={{ color: "#6F4E37" }}>{k.saldoCuti || 0} Hari</p>
-                  </div>
-                  <div>
                     <p style={{ color: "#A67B5B" }}>Pot. Izin</p>
                     <p className="font-bold" style={{ color: "#6F4E37" }}>Rp {Number(k.potonganIzinPerHari || 0).toLocaleString("id-ID")}/hari</p>
                   </div>
-                  <div className="col-span-2">
+                  <div>
                     <p style={{ color: "#A67B5B" }}>Potongan BPJS</p>
                     <p className="font-bold" style={{ color: "#6F4E37" }}>Rp {Number(k.potonganBPJSTetap || 0).toLocaleString("id-ID")}/periode</p>
+                  </div>
+                  <div className="col-span-2 pt-3 mt-1 border-t" style={{ borderColor: "#FED8B1" }}>
+                    <p className="font-bold uppercase mb-1" style={{ color: "#A67B5B" }}>Sisa Saldo Cuti (Tahun {currentYear})</p>
+                    {(() => {
+                      const cutiTaken = izinData.filter(i => 
+                        i.userId?.toString().trim().replace(/^0+/, "") === k.userId?.toString().trim().replace(/^0+/, "") &&
+                        i.jenis?.toLowerCase() === "cuti" &&
+                        (i.tglMulai || i.tanggal || "").startsWith(currentYear)
+                      ).reduce((sum, i) => sum + Number(i.totalHari || 1), 0);
+                      const sisa = (k.saldoCuti || 0) - cutiTaken;
+                      return (
+                        <div className="flex items-baseline gap-2">
+                          <p className="font-black text-2xl" style={{ color: sisa > 0 ? "#6F4E37" : "#842029" }}>
+                            {sisa} <span className="text-sm font-bold">Hari</span>
+                          </p>
+                          <p className="text-[10px]" style={{ color: "#A67B5B" }}>
+                            (Terpakai: {cutiTaken} | Jatah: {k.saldoCuti || 0})
+                          </p>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -357,13 +407,32 @@ export default function Karyawan() {
                 >
                   <Pencil size={14} /> EDIT
                 </button>
-                <button 
-                  onClick={() => handleHapus(k)}
-                  className="px-3 py-2 rounded-lg text-xs font-bold transition-colors"
-                  style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}
-                >
-                  <Trash2 size={14} />
-                </button>
+                {showArsip ? (
+                  <>
+                    <button 
+                      onClick={() => handleRestore(k)}
+                      className="flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      style={{ backgroundColor: "#d4edda", color: "#155724" }}
+                    >
+                      <RotateCcw size={14} /> RESTORE
+                    </button>
+                    <button 
+                      onClick={() => handleDeletePermanent(k)}
+                      className="px-3 py-2 rounded-lg text-xs font-bold transition-colors"
+                      style={{ backgroundColor: "#f8d7da", color: "#842029" }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <button 
+                    onClick={() => handleHapus(k)}
+                    className="px-3 py-2 rounded-lg text-xs font-bold transition-colors"
+                    style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -405,9 +474,20 @@ export default function Karyawan() {
                       <button onClick={() => handleEdit(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#ECB176", color: "#6F4E37" }}>
                         <Pencil size={14} />
                       </button>
-                      <button onClick={() => handleHapus(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}>
-                        <Trash2 size={14} />
-                      </button>
+                      {showArsip ? (
+                        <>
+                          <button onClick={() => handleRestore(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#d4edda", color: "#155724" }}>
+                            <RotateCcw size={14} />
+                          </button>
+                          <button onClick={() => handleDeletePermanent(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#f8d7da", color: "#842029" }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      ) : (
+                        <button onClick={() => handleHapus(k)} className="p-1.5 rounded-lg" style={{ backgroundColor: "#FED8B1", color: "#6F4E37" }}>
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

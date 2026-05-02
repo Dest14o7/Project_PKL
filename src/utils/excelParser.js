@@ -92,6 +92,8 @@ const parseSheet = (ws) => {
       const tanggal = tanggalRaw.trim();
       const jamMasukPagi    = formatTime(row[offset + 1]);
       const jamKeluarPagi   = formatTime(row[offset + 3]);
+      const jamMasukSiang   = formatTime(row[offset + 5]);
+      const jamKeluarSiang  = formatTime(row[offset + 7]);
       const jamMasukLembur  = formatTime(row[offset + 10]);
       const jamKeluarLembur = formatTime(row[offset + 12]);
 
@@ -99,6 +101,8 @@ const parseSheet = (ws) => {
         tanggal,
         jamMasukPagi,
         jamKeluarPagi,
+        jamMasukSiang,
+        jamKeluarSiang,
         jamMasukLembur,
         jamKeluarLembur,
       });
@@ -132,17 +136,30 @@ const hitungRekap = (dailyData, periode) => {
   let hariTidakHadir = 0;
 
   for (const day of dailyData) {
-    const adaAbsenPagi = day.jamMasukPagi || day.jamKeluarPagi;
+    const adaAbsen = day.jamMasukPagi || day.jamKeluarPagi || 
+                     day.jamMasukSiang || day.jamKeluarSiang || 
+                     day.jamMasukLembur || day.jamKeluarLembur;
 
-    if (adaAbsenPagi) {
+    if (adaAbsen) {
       hariHadir++;
 
-      // Hitung jam kerja pagi
+      // Hitung jam kerja tiap sesi
       const jamPagi = hitungJamKerja(day.jamMasukPagi, day.jamKeluarPagi);
-      // Hitung lembur
-      const jamLembur = hitungJamKerja(day.jamMasukLembur, day.jamKeluarLembur);
+      const jamSiang = hitungJamKerja(day.jamMasukSiang, day.jamKeluarSiang);
+      let jamLembur = hitungJamKerja(day.jamMasukLembur, day.jamKeluarLembur);
 
-      totalJamKerja += jamPagi + jamLembur;
+      // Kurangi lembur berdasarkan keterlambatan (Rule 4.4)
+      if (day.jamMasukPagi) {
+        const [h, m] = day.jamMasukPagi.split(":").map(Number);
+        const menitMasuk = h * 60 + m;
+        const batasMasuk = 8 * 60; // 08:00
+        if (menitMasuk > batasMasuk) {
+          const menitTerlambat = menitMasuk - batasMasuk;
+          jamLembur = Math.max(0, jamLembur - (menitTerlambat / 60));
+        }
+      }
+
+      totalJamKerja += jamPagi + jamSiang + jamLembur;
       totalJamLembur += jamLembur;
     } else {
       hariTidakHadir++;
@@ -220,7 +237,9 @@ export const deteksiAnomali = (dailyData, periode, sabtuFullTime = false) => {
     const isSabtu = dayOfWeek === 6;
     const jamSelesai = isSabtu && !sabtuFullTime ? "12:00" : "16:00";
 
-    const adaAbsen = day.jamMasukPagi || day.jamKeluarPagi;
+    const adaAbsen = day.jamMasukPagi || day.jamKeluarPagi || 
+                     day.jamMasukSiang || day.jamKeluarSiang || 
+                     day.jamMasukLembur || day.jamKeluarLembur;
 
     // Tidak hadir
     if (!adaAbsen) {

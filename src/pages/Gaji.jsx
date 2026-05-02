@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { DollarSign, ChevronDown, ChevronUp, Search } from "lucide-react";
 import { db } from "../firebase";
-import { collection, getDocs, deleteDoc, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs, deleteDoc, doc, getDoc, addDoc, updateDoc } from "firebase/firestore";
 import { exportRekapAbsen } from "../utils/exportExcel";
 import { exportRekapGaji } from "../utils/exportPDF";
 
@@ -16,6 +16,12 @@ export default function Gaji() {
   const [filterPeriode, setFilterPeriode] = useState("");
   const [allPeriods, setAllPeriods] = useState([]);
   const [izinData, setIzinData] = useState([]);
+  const [komponenData, setKomponenData] = useState([]);
+  const [activeDetailTab, setActiveDetailTab] = useState({});
+  const [bonusForm, setBonusForm] = useState({ nama: "", nominal: "", keterangan: "", tipe: "one-time" });
+  const [potonganForm, setPotonganForm] = useState({ nama: "", nominal: "", keterangan: "" });
+  const [editIzinMode, setEditIzinMode] = useState(null);
+  const [manualIzinValue, setManualIzinValue] = useState("");
 
   const fetchData = async () => {
     try {
@@ -43,9 +49,13 @@ export default function Gaji() {
       const izinSnap = await getDocs(collection(db, "izin"));
       const izin = izinSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+      const komponenSnap = await getDocs(collection(db, "komponenGaji"));
+      const komponen = komponenSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
       setAbsensiData(absensi);
       setKaryawanData(karyawan);
       setIzinData(izin);
+      setKomponenData(komponen);
     } catch (err) {
       console.error("Gaji Fetch Error:", err);
     } finally {
@@ -59,13 +69,93 @@ export default function Gaji() {
     fetchData(); 
   }, []);
 
+  const handleSaveKomponen = async (gajiItem, kategori) => {
+    try {
+      const isBonus = kategori === "bonus";
+      const form = isBonus ? bonusForm : potonganForm;
+      if (!form.nama || !form.nominal) return alert("Nama dan nominal wajib diisi!");
+      
+      const payload = {
+        userId: gajiItem.userId,
+        kategori,
+        nama: form.nama,
+        nominal: Number(form.nominal),
+        keterangan: form.keterangan || "",
+        periode: isBonus && form.tipe === "recurring" ? "" : gajiItem.periode,
+        tipe: isBonus ? form.tipe : "one-time",
+        createdAt: new Date().toISOString()
+      };
+      
+      await addDoc(collection(db, "komponenGaji"), payload);
+      
+      if (isBonus) setBonusForm({ nama: "", nominal: "", keterangan: "", tipe: "one-time" });
+      else setPotonganForm({ nama: "", nominal: "", keterangan: "" });
+      
+      fetchData();
+    } catch (err) {
+      console.error("Save komponen error:", err);
+    }
+  };
+
+  const handleDeleteKomponen = async (id) => {
+    if (!window.confirm("Hapus komponen ini?")) return;
+    try {
+      await deleteDoc(doc(db, "komponenGaji", id));
+      fetchData();
+    } catch (err) {
+      console.error("Delete komponen error:", err);
+    }
+  };
+
+  const handleSaveIzinManual = async (gajiItem) => {
+    try {
+      const value = parseFloat(manualIzinValue);
+      if (isNaN(value) || value < 0) return alert("Nilai tidak valid. Harus angka >= 0.");
+      
+      await updateDoc(doc(db, "absensi", gajiItem.id), {
+        isManualIzin: true,
+        manualPotonganIzinHari: value
+      });
+      
+      await addDoc(collection(db, "auditLogs"), {
+        action: "EDIT_POTONGAN_IZIN",
+        userId: gajiItem.userId,
+        periode: gajiItem.periode,
+        adminId: "admin", 
+        oldValue: gajiItem.totalHariPotonganIzin,
+        newValue: value,
+        timestamp: new Date().toISOString()
+      });
+      
+      setEditIzinMode(null);
+      fetchData();
+    } catch (err) {
+      console.error("Save izin manual error:", err);
+    }
+  };
+
+  const handleResetIzinManual = async (gajiItem) => {
+    if (!window.confirm("Kembalikan ke hitungan otomatis?")) return;
+    try {
+      await updateDoc(doc(db, "absensi", gajiItem.id), {
+        isManualIzin: false,
+        manualPotonganIzinHari: 0
+      });
+      fetchData();
+    } catch (err) {
+      console.error("Reset izin manual error:", err);
+    }
+  };
+
   // Gabungkan absensi dengan data karyawan
   const gajiList = absensiData.map(absensi => {
     try {
       const karyawan = karyawanData.find(k =>
         k.userId?.toString()?.trim()?.replace(/^0+/, "") === absensi.userId?.toString()?.trim()?.replace(/^0+/, "")
       );
-      if (!karyawan) return null;
+      
+      // Filter karyawan yang diarsip agar tidak muncul di menu gaji
+      if (!karyawan || karyawan.status === "arsip") return null;
 
       // Normalize Periode
       let displayPeriode = absensi.periode || "";
@@ -87,16 +177,20 @@ export default function Gaji() {
       const bulanIndex = bulanIndo.indexOf(bulan) + 1;
       const monthPrefix = (bulanIndex > 0 && tahun) ? `${tahun}-${bulanIndex.toString().padStart(2, "0")}` : "";
 
-      const listIzinKaryawan = izinData.filter(i => 
-        i.userId?.toString()?.replace(/^0+/, "") === absensi.userId?.toString()?.replace(/^0+/, "") &&
-        i.tanggal?.startsWith(monthPrefix)
-      );
+      const listIzinKaryawan = izinData.filter(i => {
+        const sameUser = i.userId?.toString()?.replace(/^0+/, "") === absensi.userId?.toString()?.replace(/^0+/, "");
+        // Gunakan tglMulai sebagai referensi tanggal utama, fallback ke tanggal
+        const refTanggal = i.tglMulai || i.tanggal || "";
+        const matchPeriode = monthPrefix ? refTanggal.startsWith(monthPrefix) : true;
+        return sameUser && matchPeriode;
+      });
 
+      // Hitung total hari per jenis (bukan jumlah dokumen)
       const counts = {
-        Izin: listIzinKaryawan.filter(i => i.jenis === "Izin").length,
-        Sakit: listIzinKaryawan.filter(i => i.jenis === "Sakit").length,
-        Cuti: listIzinKaryawan.filter(i => i.jenis === "Cuti").length,
-        Setengah: listIzinKaryawan.filter(i => i.jenis?.includes("Setengah")).length,
+        Izin: listIzinKaryawan.filter(i => i.jenis?.toLowerCase() === "izin").reduce((sum, i) => sum + Number(i.totalHari || 1), 0),
+        Sakit: listIzinKaryawan.filter(i => i.jenis?.toLowerCase() === "sakit").reduce((sum, i) => sum + Number(i.totalHari || 1), 0),
+        Cuti: listIzinKaryawan.filter(i => i.jenis?.toLowerCase() === "cuti").reduce((sum, i) => sum + Number(i.totalHari || 1), 0),
+        Setengah: listIzinKaryawan.filter(i => i.jenis?.toLowerCase()?.includes("setengah")).reduce((sum, i) => sum + Number(i.totalHari || 0.5), 0),
       };
 
       const tarifJam = Number(karyawan?.tarifJam || 0);
@@ -107,11 +201,35 @@ export default function Gaji() {
       const upahLembur = totalJamLembur * tarifJam;
       
       const potBPJS = karyawan.tipe === "tetap" ? Number(karyawan.potonganBPJSTetap || 0) : 0;
-      const potIzin = counts.Izin * Number(karyawan.potonganIzinPerHari || 0);
+      let totalHariPotonganIzin = karyawan.tipe === "freelance" ? 0 : (counts.Izin + counts.Setengah);
+      if (karyawan.tipe !== "freelance" && absensi.isManualIzin) {
+        totalHariPotonganIzin = Number(absensi.manualPotonganIzinHari || 0);
+      }
+      const potIzin = totalHariPotonganIzin * Number(karyawan.potonganIzinPerHari || 0);
       
-      const totalIncome = gajiPokok + upahLembur;
-      const totalDeduction = potBPJS + potIzin;
+      const myKomponen = komponenData.filter(c => 
+        c?.userId?.toString()?.trim()?.replace(/^0+/, "") === absensi.userId?.toString()?.trim()?.replace(/^0+/, "") &&
+        c.periode?.trim() === displayPeriode?.trim()
+      );
+
+      const bonusList = myKomponen.filter(c => c.kategori?.toLowerCase() === "bonus");
+      const potonganList = myKomponen.filter(c => c.kategori?.toLowerCase() === "potongan");
+
+      const totalBonus = bonusList.reduce((sum, b) => sum + Number(b.nominal || 0), 0);
+      const totalPotonganManual = potonganList.reduce((sum, p) => sum + Number(p.nominal || 0), 0);
+
+      const totalIncome = gajiPokok + upahLembur + totalBonus;
+      const totalDeduction = potBPJS + potIzin + totalPotonganManual;
       const takeHomePay = totalIncome - totalDeduction;
+
+      // Hitung Sisa Cuti Tahun Ini
+      const currentYear = displayPeriode.split(" ")[1] || new Date().getFullYear().toString();
+      const cutiTaken = izinData.filter(i => 
+        i.userId?.toString().trim().replace(/^0+/, "") === absensi.userId?.toString().trim().replace(/^0+/, "") &&
+        i.jenis?.toLowerCase() === "cuti" &&
+        (i.tglMulai || i.tanggal || "").startsWith(currentYear)
+      ).reduce((sum, i) => sum + Number(i.totalHari || 1), 0);
+      const saldoCutiAktif = (karyawan.saldoCuti || 0) - cutiTaken;
 
       return {
         id: absensi.id,
@@ -127,8 +245,14 @@ export default function Gaji() {
         upahLembur,
         potBPJS,
         potIzin,
+        totalHariPotonganIzin,
+        totalBonus,
+        totalPotonganManual,
+        bonusList,
+        potonganList,
         counts,
-        saldoCuti: karyawan.saldoCuti || 0,
+        isManualIzin: absensi.isManualIzin,
+        saldoCuti: saldoCutiAktif,
         hariHadir: absensi.rekap?.hariHadir || 0,
         takeHomePay
       };
@@ -290,75 +414,246 @@ export default function Gaji() {
               {expandedId === g.id && (
                 <div className="px-5 pb-4" style={{ borderTop: "1px solid #FED8B1" }}>
                   
-                  {/* Summary row */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                    <div className="rounded-lg p-3 bg-[#fffaf5]">
-                      <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Ringkasan Izin</p>
-                      <div className="grid grid-cols-2 gap-1 mt-1 text-[11px] font-medium" style={{ color: "#6F4E37" }}>
-                        <span>Izin: {g.counts.Izin}</span>
-                        <span>Sakit: {g.counts.Sakit}</span>
-                        <span>Cuti: {g.counts.Cuti}</span>
-                        <span>1/2 Hari: {g.counts.Setengah}</span>
-                      </div>
-                    </div>
-                    {g.tipe === "tetap" && (
-                      <div className="rounded-lg p-3 bg-[#fffaf5]">
-                        <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Sisa Cuti</p>
-                        <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.saldoCuti} Hari</p>
-                      </div>
-                    )}
-                    <div className="rounded-lg p-3 bg-[#fffaf5]">
-                      <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Kehadiran</p>
-                      <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.hariHadir} Hari Hadir</p>
-                    </div>
-                    <div className="rounded-lg p-3 bg-[#fffaf5]">
-                      <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Jam Kerja</p>
-                      <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.totalJamKerja.toFixed(1)} Jam</p>
-                    </div>
+                  {/* Detail Tabs Nav */}
+                  <div className="flex border-b mt-4 mb-4" style={{ borderColor: "#FED8B1" }}>
+                    {["rincian", "bonus", "potongan"].map(tabKey => (
+                      <button
+                        key={tabKey}
+                        onClick={() => setActiveDetailTab({ ...activeDetailTab, [g.id]: tabKey })}
+                        className={`px-4 py-2 text-sm font-medium ${
+                          (activeDetailTab[g.id] || "rincian") === tabKey 
+                            ? "border-b-2" : "text-gray-500 hover:text-gray-700"
+                        }`}
+                        style={{ 
+                          borderColor: (activeDetailTab[g.id] || "rincian") === tabKey ? "#6F4E37" : "transparent",
+                          color: (activeDetailTab[g.id] || "rincian") === tabKey ? "#6F4E37" : ""
+                        }}
+                      >
+                        {tabKey === "rincian" ? "Rincian Gaji" : 
+                         tabKey === "bonus" ? "Bonus" : "Potongan Manual"}
+                      </button>
+                    ))}
                   </div>
 
-                  {/* Components row */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                    {/* Income */}
-                    <div>
-                      <h5 className="text-xs font-bold mb-2 uppercase" style={{ color: "#6F4E37" }}>Pendapatan</h5>
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span style={{ color: "#A67B5B" }}>Gaji Pokok</span>
-                          <span className="font-medium" style={{ color: "#6F4E37" }}>Rp {g.gajiPokok.toLocaleString("id-ID")}</span>
+                  {/* Tab Rincian */}
+                  {(activeDetailTab[g.id] || "rincian") === "rincian" && (
+                    <>
+                      {/* Summary row */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                        <div className="rounded-lg p-3 bg-[#fffaf5]">
+                          <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Ringkasan Izin</p>
+                          <div className="grid grid-cols-2 gap-1 mt-1 text-[11px] font-medium" style={{ color: "#6F4E37" }}>
+                            <span>Izin: {g.counts.Izin}</span>
+                            <span>Sakit: {g.counts.Sakit}</span>
+                            <span>Cuti: {g.counts.Cuti}</span>
+                            <span>1/2 Hari: {g.counts.Setengah}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between text-sm">
-                          <span style={{ color: "#A67B5B" }}>Upah Lembur ({g.totalJamLembur.toFixed(1)} jam)</span>
-                          <span className="font-medium" style={{ color: "#6F4E37" }}>Rp {g.upahLembur.toLocaleString("id-ID")}</span>
-                        </div>
-                      </div>
-                    </div>
-                    {/* Deductions */}
-                    <div>
-                      <h5 className="text-xs font-bold mb-2 uppercase" style={{ color: "#6F4E37" }}>Potongan</h5>
-                      <div className="space-y-2">
                         {g.tipe === "tetap" && (
-                          <div className="flex justify-between text-sm">
-                            <span style={{ color: "#A67B5B" }}>Potongan BPJS</span>
-                            <span className="font-medium text-red-600">-Rp {g.potBPJS.toLocaleString("id-ID")}</span>
+                          <div className="rounded-lg p-3 bg-[#fffaf5]">
+                            <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Sisa Cuti</p>
+                            <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.saldoCuti} Hari</p>
                           </div>
                         )}
-                        <div className="flex justify-between text-sm">
-                          <span style={{ color: "#A67B5B" }}>Potongan Izin ({g.counts.Izin} hari)</span>
-                          <span className="font-medium text-red-600">-Rp {g.potIzin.toLocaleString("id-ID")}</span>
+                        <div className="rounded-lg p-3 bg-[#fffaf5]">
+                          <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Kehadiran</p>
+                          <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.hariHadir} Hari Hadir</p>
+                        </div>
+                        <div className="rounded-lg p-3 bg-[#fffaf5]">
+                          <p className="text-[10px] uppercase font-bold" style={{ color: "#A67B5B" }}>Jam Kerja</p>
+                          <p className="font-bold text-sm mt-1" style={{ color: "#6F4E37" }}>{g.totalJamKerja.toFixed(1)} Jam</p>
                         </div>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Total */}
-                  <div className="flex justify-between items-center mt-6 pt-3"
-                    style={{ borderTop: "2px solid #FED8B1" }}>
-                    <p className="text-sm font-bold" style={{ color: "#6F4E37" }}>Take Home Pay</p>
-                    <p className="text-xl font-bold" style={{ color: "#6F4E37" }}>
-                      Rp {g.takeHomePay.toLocaleString("id-ID")}
-                    </p>
-                  </div>
+                      {/* Components row */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                        {/* Income */}
+                        <div>
+                          <h5 className="text-xs font-bold mb-2 uppercase" style={{ color: "#6F4E37" }}>Pendapatan</h5>
+                          <div className="space-y-2">
+                            <div className="flex justify-between text-sm">
+                              <span style={{ color: "#A67B5B" }}>Gaji Pokok</span>
+                              <span className="font-medium" style={{ color: "#6F4E37" }}>Rp {g.gajiPokok.toLocaleString("id-ID")}</span>
+                            </div>
+                            <div className="flex justify-between text-sm">
+                              <span style={{ color: "#A67B5B" }}>Upah Lembur ({g.totalJamLembur.toFixed(1)} jam)</span>
+                              <span className="font-medium" style={{ color: "#6F4E37" }}>Rp {g.upahLembur.toLocaleString("id-ID")}</span>
+                            </div>
+                            {g.bonusList && g.bonusList.map((b, i) => (
+                              <div key={`bonus-${i}`} className="flex justify-between text-sm">
+                                <span style={{ color: "#A67B5B" }}>Bonus: {b.nama}</span>
+                                <span className="font-medium" style={{ color: "#6F4E37" }}>Rp {Number(b.nominal || 0).toLocaleString("id-ID")}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Deductions */}
+                        <div>
+                          <h5 className="text-xs font-bold mb-2 uppercase" style={{ color: "#6F4E37" }}>Potongan</h5>
+                          <div className="space-y-2">
+                            {g.tipe === "tetap" && (
+                              <div className="flex justify-between text-sm items-center">
+                                <span style={{ color: "#A67B5B" }}>Potongan BPJS</span>
+                                <span className="font-medium text-red-600">-Rp {g.potBPJS.toLocaleString("id-ID")}</span>
+                              </div>
+                            )}
+                            {g.tipe === "tetap" && (
+                              <div className="flex justify-between text-sm items-center">
+                                <div className="flex items-center gap-2">
+                                  <span style={{ color: "#A67B5B" }}>
+                                    Potongan Izin ({editIzinMode === g.id ? (
+                                      <input 
+                                        type="number" min="0" step="0.5"
+                                        value={manualIzinValue}
+                                        onChange={e => setManualIzinValue(e.target.value)}
+                                        className="w-16 px-1 border rounded text-xs"
+                                        style={{ borderColor: "#ECB176" }}
+                                      />
+                                    ) : g.totalHariPotonganIzin} hari)
+                                    {g.isManualIzin && <span className="text-[9px] ml-1 bg-yellow-100 text-yellow-800 px-1 rounded">Manual</span>}
+                                  </span>
+                                  {editIzinMode === g.id ? (
+                                    <>
+                                      <button onClick={() => handleSaveIzinManual(g)} className="text-xs text-green-600 font-bold hover:underline">Simpan</button>
+                                      <button onClick={() => setEditIzinMode(null)} className="text-xs text-red-600 font-bold hover:underline">Batal</button>
+                                    </>
+                                  ) : (
+                                    <button onClick={() => { setEditIzinMode(g.id); setManualIzinValue(g.totalHariPotonganIzin); }} className="text-xs text-blue-500 hover:underline">Edit</button>
+                                  )}
+                                  {g.isManualIzin && editIzinMode !== g.id && (
+                                    <button onClick={() => handleResetIzinManual(g)} className="text-xs text-gray-500 underline ml-2">Reset ke Otomatis</button>
+                                  )}
+                                </div>
+                                <span className="font-medium text-red-600">-Rp {g.potIzin.toLocaleString("id-ID")}</span>
+                              </div>
+                            )}
+                            {g.potonganList && g.potonganList.map((p, i) => (
+                              <div key={`potongan-${i}`} className="flex justify-between text-sm">
+                                <span style={{ color: "#A67B5B" }}>Potongan: {p.nama}</span>
+                                <span className="font-medium text-red-600">-Rp {Number(p.nominal || 0).toLocaleString("id-ID")}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Total */}
+                      <div className="flex justify-between items-center mt-6 pt-3"
+                        style={{ borderTop: "2px solid #FED8B1" }}>
+                        <p className="text-sm font-bold" style={{ color: "#6F4E37" }}>Take Home Pay</p>
+                        <p className="text-xl font-bold" style={{ color: "#6F4E37" }}>
+                          Rp {g.takeHomePay.toLocaleString("id-ID")}
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Tab Bonus */}
+                  {(activeDetailTab[g.id] || "rincian") === "bonus" && (
+                    <div className="mt-4">
+                      <div className="flex gap-2 mb-4 flex-wrap items-end">
+                        <div className="flex-1 min-w-[120px]">
+                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Nama Bonus</label>
+                          <input type="text" value={bonusForm.nama} onChange={e => setBonusForm({...bonusForm, nama: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="Cth: Lembur Ekstra" />
+                        </div>
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Nominal</label>
+                          <input type="number" value={bonusForm.nominal} onChange={e => setBonusForm({...bonusForm, nominal: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="0" />
+                        </div>
+                        <div className="flex-1 min-w-[150px]">
+                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Keterangan</label>
+                          <input type="text" value={bonusForm.keterangan} onChange={e => setBonusForm({...bonusForm, keterangan: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="Opsional" />
+                        </div>
+                        <div className="flex-none w-24">
+                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Tipe</label>
+                          <select value={bonusForm.tipe} onChange={e => setBonusForm({...bonusForm, tipe: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none bg-white">
+                            <option value="one-time">One-time</option>
+                            <option value="recurring">Recurring</option>
+                          </select>
+                        </div>
+                        <button onClick={() => handleSaveKomponen(g, "bonus")} className="px-4 py-1.5 rounded text-sm font-medium h-[30px]" style={{ backgroundColor: "#6F4E37", color: "white" }}>
+                          Simpan
+                        </button>
+                      </div>
+                      
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead>
+                            <tr className="border-b" style={{ borderColor: "#FED8B1", color: "#A67B5B" }}>
+                              <th className="py-2 font-medium">Nama Bonus</th>
+                              <th className="py-2 font-medium">Nominal</th>
+                              <th className="py-2 font-medium">Keterangan</th>
+                              <th className="py-2 font-medium">Tipe</th>
+                              <th className="py-2 font-medium">Aksi</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {g.bonusList.length === 0 && <tr><td colSpan="5" className="py-4 text-center text-xs text-gray-400">Belum ada bonus</td></tr>}
+                            {g.bonusList.map(b => (
+                              <tr key={b.id} className="border-b last:border-0" style={{ borderColor: "#fef3e9" }}>
+                                <td className="py-2" style={{ color: "#6F4E37" }}>{b.nama}</td>
+                                <td className="py-2" style={{ color: "#6F4E37" }}>Rp {Number(b.nominal).toLocaleString("id-ID")}</td>
+                                <td className="py-2 text-xs" style={{ color: "#A67B5B" }}>{b.keterangan || "-"}</td>
+                                <td className="py-2 text-xs" style={{ color: "#A67B5B" }}>{b.tipe === "recurring" ? "Recurring" : "One-time"}</td>
+                                <td className="py-2">
+                                  <button onClick={() => handleDeleteKomponen(b.id)} className="text-red-500 text-xs font-medium hover:underline">Hapus</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tab Potongan Manual */}
+                  {(activeDetailTab[g.id] || "rincian") === "potongan" && (
+                    <div className="mt-4">
+                      <div className="flex gap-2 mb-4 flex-wrap items-end">
+                        <div className="flex-1 min-w-[120px]">
+                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Nama Potongan</label>
+                          <input type="text" value={potonganForm.nama} onChange={e => setPotonganForm({...potonganForm, nama: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="Cth: Cicilan Koperasi" />
+                        </div>
+                        <div className="flex-1 min-w-[100px]">
+                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Nominal</label>
+                          <input type="number" value={potonganForm.nominal} onChange={e => setPotonganForm({...potonganForm, nominal: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="0" />
+                        </div>
+                        <div className="flex-1 min-w-[150px]">
+                          <label className="text-[10px] font-bold uppercase" style={{ color: "#A67B5B" }}>Keterangan</label>
+                          <input type="text" value={potonganForm.keterangan} onChange={e => setPotonganForm({...potonganForm, keterangan: e.target.value})} className="w-full mt-1 px-2 py-1 border rounded text-sm outline-none" placeholder="Opsional" />
+                        </div>
+                        <button onClick={() => handleSaveKomponen(g, "potongan")} className="px-4 py-1.5 rounded text-sm font-medium h-[30px]" style={{ backgroundColor: "#6F4E37", color: "white" }}>
+                          Simpan
+                        </button>
+                      </div>
+                      
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead>
+                            <tr className="border-b" style={{ borderColor: "#FED8B1", color: "#A67B5B" }}>
+                              <th className="py-2 font-medium">Nama Potongan</th>
+                              <th className="py-2 font-medium">Nominal</th>
+                              <th className="py-2 font-medium">Keterangan</th>
+                              <th className="py-2 font-medium">Aksi</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {g.potonganList.length === 0 && <tr><td colSpan="4" className="py-4 text-center text-xs text-gray-400">Belum ada potongan manual</td></tr>}
+                            {g.potonganList.map(p => (
+                              <tr key={p.id} className="border-b last:border-0" style={{ borderColor: "#fef3e9" }}>
+                                <td className="py-2" style={{ color: "#6F4E37" }}>{p.nama}</td>
+                                <td className="py-2 text-red-600">Rp {Number(p.nominal).toLocaleString("id-ID")}</td>
+                                <td className="py-2 text-xs" style={{ color: "#A67B5B" }}>{p.keterangan || "-"}</td>
+                                <td className="py-2">
+                                  <button onClick={() => handleDeleteKomponen(p.id)} className="text-red-500 text-xs font-medium hover:underline">Hapus</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
