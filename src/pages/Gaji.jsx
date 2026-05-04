@@ -328,12 +328,6 @@ export default function Gaji() {
     }
   }).filter(Boolean);
 
-  console.log("GAJI DEBUG:", {
-    rawAbsensi: absensiData.length,
-    gajiList: gajiList.length,
-    activeP: filterPeriode
-  });
-
   // Ambil list periode unik
   const periodeList = [...new Set(gajiList.map(g => g.periode))].sort();
 

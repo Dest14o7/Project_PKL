@@ -23,7 +23,6 @@ export default function Dashboard() {
     totalIzin: 0,
     keterlambatanList: [],
     izinList: [],
-    debug: {}
   });
   const [loading, setLoading] = useState(true);
   const [selectedPeriode, setSelectedPeriode] = useState("");
@@ -118,13 +117,6 @@ export default function Dashboard() {
           const dateB = new Date(b.tanggal || 0);
           return dateB - dateA;
         }),
-        debug: {
-          activeP: targetP,
-          monthPrefix: prefix,
-          rawAnomali: anomaliData.length,
-          rawIzin: izinData.length,
-          filteredAnomali: filteredAnomali.length
-        }
       });
     } catch (err) {
       console.error("Dashboard Fetch Error:", err);
@@ -296,12 +288,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Debug Bar */}
-      {!loading && (
-        <div className="mt-8 p-4 bg-gray-50 border rounded-xl text-[10px] font-mono text-gray-400">
-          DEBUG: ActiveP({stats.debug?.activeP}) | Prefix({stats.debug?.monthPrefix}) | Raw({stats.debug?.rawAnomali}) | Match({stats.debug?.filteredAnomali})
-        </div>
-      )}
     </div>
   );
 }
