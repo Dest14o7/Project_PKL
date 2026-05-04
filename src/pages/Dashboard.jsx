@@ -9,13 +9,6 @@ export default function Dashboard() {
   // Hooks harus di dalam sini
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      navigate('/'); // Tendang ke login kalau gak ada token
-    }
-  }, [navigate]);
-
   const [stats, setStats] = useState({
     totalKaryawan: 0,
     totalFreelance: 0,

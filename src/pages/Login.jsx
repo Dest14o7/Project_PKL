@@ -12,7 +12,7 @@ const Login = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     if (token) {
       navigate('/dashboard');
     }
@@ -23,7 +23,7 @@ const Login = () => {
     try {
       const res = await signInWithEmailAndPassword(auth, email, password);
       const token = await res.user.getIdToken();
-      localStorage.setItem('token', token);
+      sessionStorage.setItem('token', token);
       navigate('/dashboard'); 
     } catch (err) {
       setError('Email/Password salah bos!');

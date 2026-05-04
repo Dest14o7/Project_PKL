@@ -55,7 +55,7 @@ export default function Navbar({ activePage }) {
             </div>
             <button 
               onClick={() => {
-                localStorage.removeItem("token");
+                sessionStorage.removeItem("token");
                 navigate("/");
               }}
               className="w-full text-left px-4 py-2 text-sm flex items-center gap-2 hover:bg-red-50 text-red-600 transition-colors"

@@ -12,6 +12,14 @@ import SlipGaji from "./pages/SlipGaji";
 import Pengaturan from "./pages/Pengaturan";
 import Login from "./pages/Login";
 
+const ProtectedRoute = ({ children, activePage }) => {
+  const token = sessionStorage.getItem("token");
+  if (!token) {
+    return <Navigate to="/" replace />;
+  }
+  return <Layout activePage={activePage}>{children}</Layout>;
+};
+
 const Layout = ({ children, activePage }) => {
   return (
     <div className="flex min-h-screen" style={{ backgroundColor: "#FFF8F0" }}>
@@ -33,18 +41,18 @@ export default function App() {
         {/* Login */}
         <Route path="/" element={<Login />} />
 
-        {/* Routes with Layout */}
-        <Route path="/dashboard" element={<Layout activePage="dashboard"><Dashboard /></Layout>} />
-        <Route path="/karyawan" element={<Layout activePage="karyawan"><Karyawan /></Layout>} />
-        <Route path="/absensi" element={<Layout activePage="absensi"><Absensi /></Layout>} />
-        <Route path="/anomali" element={<Layout activePage="anomali"><Anomali /></Layout>} />
-        <Route path="/izin" element={<Layout activePage="izin"><Izin /></Layout>} />
-        <Route path="/gaji" element={<Layout activePage="gaji"><Gaji /></Layout>} />
-        <Route path="/slipgaji" element={<Layout activePage="slipgaji"><SlipGaji /></Layout>} />
-        <Route path="/pengaturan" element={<Layout activePage="pengaturan"><Pengaturan /></Layout>} />
+        {/* Protected Routes */}
+        <Route path="/dashboard" element={<ProtectedRoute activePage="dashboard"><Dashboard /></ProtectedRoute>} />
+        <Route path="/karyawan" element={<ProtectedRoute activePage="karyawan"><Karyawan /></ProtectedRoute>} />
+        <Route path="/absensi" element={<ProtectedRoute activePage="absensi"><Absensi /></ProtectedRoute>} />
+        <Route path="/anomali" element={<ProtectedRoute activePage="anomali"><Anomali /></ProtectedRoute>} />
+        <Route path="/izin" element={<ProtectedRoute activePage="izin"><Izin /></ProtectedRoute>} />
+        <Route path="/gaji" element={<ProtectedRoute activePage="gaji"><Gaji /></ProtectedRoute>} />
+        <Route path="/slipgaji" element={<ProtectedRoute activePage="slipgaji"><SlipGaji /></ProtectedRoute>} />
+        <Route path="/pengaturan" element={<ProtectedRoute activePage="pengaturan"><Pengaturan /></ProtectedRoute>} />
 
         {/* Redirect */}
-        <Route path="*" element={<Navigate to="/" />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>
   );
